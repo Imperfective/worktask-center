@@ -14,9 +14,10 @@ export default function DetailPage({ params }: { params: Promise<{ id: string }>
   const [d, setD] = useState<any>(null);
   const [modal, setModal] = useState<any>(null);
   const [comment, setComment] = useState("");
+  const [err, setErr] = useState("");
   const router = useRouter();
 
-  async function load() { try { setD(await api(`/api/requests/${id}`)); } catch (e: any) { alert(e.message); } }
+  async function load() { try { setD(await api(`/api/requests/${id}`)); setErr(""); } catch (e: any) { setErr(e.message); } }
   useEffect(() => { load(); }, [id]);
   useEffect(() => {
     const h = () => load();
@@ -32,8 +33,9 @@ export default function DetailPage({ params }: { params: Promise<{ id: string }>
 
   function openAction(a: any) {
     const need = a.needs ?? [];
-    if (a.action === "assign_self") return run("assign", {});
-    if (need.length === 0) return run("transition", { action: a.action });
+    setErr("");
+    if (a.action === "assign_self") return direct("assign", {});
+    if (need.length === 0) return direct("transition", { action: a.action });
     const fields: Field[] = [];
     if (need.includes("reason")) fields.push({ key: "reason", label: a.reasonLabel ?? "사유", type: "textarea", required: true });
     if (need.includes("result")) fields.push({ key: "result", label: "처리 내역", type: "textarea", required: true, placeholder: "어떻게 처리했는지 요청자가 알 수 있게 적어주세요" });
@@ -41,6 +43,12 @@ export default function DetailPage({ params }: { params: Promise<{ id: string }>
     if (need.includes("member")) fields.push({ key: "toUserId", label: "새 담당자", type: "select", required: true, options: members });
     if (a.action === "reject") fields.push({ key: "duplicateOfId", label: "원본 요청 ID (중복인 경우)", type: "text", placeholder: "예: 8" });
     setModal({ title: a.label, fields, submitLabel: a.label, action: a.action });
+  }
+  // 모달 없이 바로 실행하는 액션의 오류를 화면에 남긴다.
+  // 화면이 오래돼 서버 상태와 어긋나면 400이 오는데, 잡아주지 않으면
+  // 버튼을 눌러도 아무 일도 일어나지 않는 것처럼 보인다.
+  async function direct(kind: "assign" | "transition", body: any) {
+    try { await run(kind, body); } catch (e: any) { setErr(e.message); load(); }
   }
   async function run(kind: "assign" | "transition", body: any) {
     const path = kind === "assign" ? `/api/requests/${id}/assign` : `/api/requests/${id}/transition`;
@@ -54,11 +62,11 @@ export default function DetailPage({ params }: { params: Promise<{ id: string }>
   async function sendComment() {
     if (!comment.trim()) return;
     try { setD(await api(`/api/requests/${id}/comments`, { method: "POST", body: JSON.stringify({ body: comment }) })); setComment(""); }
-    catch (e: any) { alert(e.message); }
+    catch (e: any) { setErr(e.message); }
   }
   async function follow() {
-    try { setD(await api(`/api/requests/${id}/follow`, { method: "POST", body: JSON.stringify({ via: "detail" }) })); }
-    catch (e: any) { alert(e.message); }
+    try { setD(await api(`/api/requests/${id}/follow`, { method: "POST", body: JSON.stringify({ via: "detail" }) })); setErr(""); }
+    catch (e: any) { setErr(e.message); load(); }
   }
 
   const tl = (e: any) => {
@@ -115,6 +123,15 @@ export default function DetailPage({ params }: { params: Promise<{ id: string }>
           {d.canFollow && <button className="btn" onClick={follow}>나도 참여</button>}
         </div>
       </div>
+      {err && (
+        <div style={{ margin: "12px 0 0", padding: "9px 13px", borderRadius: 8, fontSize: 12.5,
+          background: "var(--red-soft)", border: "1px solid var(--red-line)", color: "var(--red-dark)",
+          display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontWeight: 700 }}>처리하지 못했습니다</span>
+          <span>{err}</span>
+          <button className="btn sm" style={{ marginLeft: "auto" }} onClick={() => setErr("")}>닫기</button>
+        </div>
+      )}
       <p className="sm2" style={{ margin: "12px 0 18px" }}>
         {d.status === "CLOSED" ? "종료된 요청입니다. 더 이상 변경할 수 없습니다."
           : "보류·반려·완료는 사유 또는 처리 내역 입력이 필요합니다. 입력한 내용은 요청자와 참여자에게 그대로 전달되고 타임라인에 남습니다."}

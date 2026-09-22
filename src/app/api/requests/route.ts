@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { currentUser, serializeReq, logEvent } from "@/lib/serve";
-import { OPEN_STATUSES, deptOfCategory, PRIORITY_ORDER, EVENT } from "@/lib/domain";
-import { classify } from "@/lib/ai";
+import { OPEN_STATUSES, deptOfCategory, PRIORITY_ORDER, PRIORITY, catByKey, EVENT } from "@/lib/domain";
+import { LIMITS, bad, text, readJson } from "@/lib/validate";
 
 // GET /api/requests?view=mine|queue&tab=...
 export async function GET(req: NextRequest) {
   const user = await currentUser(req);
-  if (!user) return NextResponse.json({ error: "no user" }, { status: 400 });
+  if (!user) return bad("알 수 없는 사용자입니다");
   const view = req.nextUrl.searchParams.get("view") ?? "mine";
   const tab = req.nextUrl.searchParams.get("tab") ?? "";
 
@@ -49,21 +49,34 @@ export async function GET(req: NextRequest) {
 // POST /api/requests — 등록
 export async function POST(req: NextRequest) {
   const user = await currentUser(req);
-  if (!user) return NextResponse.json({ error: "no user" }, { status: 400 });
-  const b = await req.json();
-  const { title, description, category, priority, summary, mode, aiSuggestion, acceptedFields } = b;
-  const cat = category as string;
-  if (!title || !description || !cat) return NextResponse.json({ error: "필수 항목 누락" }, { status: 400 });
+  if (!user) return bad("알 수 없는 사용자입니다");
+  const b = await readJson(req);
+  if (!b) return bad("요청 본문이 올바른 JSON이 아닙니다");
+
+  // 값 검증을 통과한 것만 저장한다. 특히 긴급도는 목록 정렬 키라서
+  // 허용값 밖의 문자열이 들어오면 정렬이 조용히 깨진다.
+  const title = text(b.title, LIMITS.title);
+  if (!title) return bad(`제목을 입력하세요 (1~${LIMITS.title}자)`);
+  const description = text(b.description, LIMITS.description);
+  if (!description) return bad(`요청 내용을 입력하세요 (1~${LIMITS.description}자)`);
+  const cat = typeof b.category === "string" ? b.category : "";
+  if (!catByKey(cat)) return bad("알 수 없는 카테고리입니다");
+  const priority = b.priority ?? "normal";
+  if (typeof priority !== "string" || !(priority in PRIORITY)) return bad("알 수 없는 긴급도입니다");
+
+  const summary = typeof b.summary === "string" ? b.summary.trim().slice(0, LIMITS.summary) : "";
+  const mode = b.mode === "manual" ? "manual" : "ai";
   const dept = deptOfCategory(cat);
 
   const created = await prisma.request.create({
     data: {
-      title, description, summary: summary ?? "", category: cat, department: dept,
-      priority: priority ?? "normal", status: "SUBMITTED", requesterId: user.id,
-      aiSuggestion: aiSuggestion ? JSON.stringify(aiSuggestion) : null,
+      title, description, summary, category: cat, department: dept,
+      priority, status: "SUBMITTED", requesterId: user.id,
+      aiSuggestion: b.aiSuggestion ? JSON.stringify(b.aiSuggestion) : null,
     },
   });
-  await logEvent(created.id, user.id, EVENT.CREATED, { title, category: cat, priority, mode: mode ?? "ai" });
-  if (aiSuggestion) await logEvent(created.id, user.id, EVENT.AI_SUGGESTED, { suggestion: aiSuggestion, accepted: acceptedFields ?? {} });
+  await logEvent(created.id, user.id, EVENT.CREATED, { title, category: cat, priority, mode });
+  if (b.aiSuggestion)
+    await logEvent(created.id, user.id, EVENT.AI_SUGGESTED, { suggestion: b.aiSuggestion, accepted: b.acceptedFields ?? {} });
   return NextResponse.json({ id: created.id });
 }

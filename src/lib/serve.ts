@@ -13,6 +13,19 @@ export function roleFor(user: { department: string; isHandler: boolean }, reqDep
   return user.isHandler && user.department === reqDept ? "handler" : "requester";
 }
 
+// 한 사람이 두 역할을 동시에 가질 수 있다. 시설팀 담당자가 시설 요청을
+// 직접 낸 경우가 그렇다. 역할을 하나로만 보면 그 요청은 완료된 뒤
+// 종료할 사람이 없어 영원히 완료 상태에 머문다.
+export function rolesFor(
+  user: { id: string; department: string; isHandler: boolean },
+  reqDept: string, requesterId: string,
+): Role[] {
+  const roles: Role[] = [];
+  if (user.isHandler && user.department === reqDept) roles.push("handler");
+  if (user.id === requesterId) roles.push("requester");
+  return roles;
+}
+
 export async function logEvent(requestId: number, actorId: string, type: string, payload: object) {
   return prisma.requestEvent.create({ data: { requestId, actorId, type, payload: JSON.stringify(payload) } });
 }
@@ -28,13 +41,14 @@ export async function detailDTO(id: number, viewerId: string) {
   });
   if (!r) return null;
   const viewer = await prisma.user.findUnique({ where: { id: viewerId } });
-  const role = viewer ? roleFor(viewer, r.department) : "requester";
-  // 요청자 본인인지, 담당자인지에 따라 액션 필터 (설계서 §7)
+  const roles = viewer ? rolesFor(viewer, r.department, r.requesterId) : [];
+  const role: Role = roles.includes("handler") ? "handler" : "requester";
   const isRequester = viewer?.id === r.requesterId;
-  const actions = allowedActions(r.status as Status, role).filter((a) => {
-    if (role === "requester") return isRequester; // 완료/반려 액션은 요청 당사자만
-    return true;
-  });
+  // 가진 역할 전부의 액션을 합친다 (설계서 §7). 같은 action이 겹치면 하나만.
+  const seen = new Set<string>();
+  const actions = roles
+    .flatMap((rl) => allowedActions(r.status as Status, rl))
+    .filter((a) => (seen.has(a.action) ? false : (seen.add(a.action), true)));
   const isFollower = r.followers.some((f) => f.userId === viewerId);
   return {
     ...serializeReq(r),

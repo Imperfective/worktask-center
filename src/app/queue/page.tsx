@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, code, fmtDate, categoryLabel } from "@/lib/ui";
+import { api, code, fmtDate, categoryLabel, getUserId } from "@/lib/ui";
 import { StatusBadge, PriorityText } from "@/components/Badges";
 import { deptToHandlers, SEED_USERS } from "@/lib/domain";
 
@@ -18,6 +18,7 @@ export default function QueuePage() {
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [stats, setStats] = useState<any>(null);
   const [me, setMe] = useState<any>(null);
+  const [err, setErr] = useState("");
   const router = useRouter();
 
   async function load() {
@@ -27,7 +28,7 @@ export default function QueuePage() {
         Promise.all(TABS.map((t) => api(`/api/requests?view=queue&tab=${t.key}`))),
       ]);
       setItems(d.items); setStats(s);
-      setMe(u.users.find((x: any) => x.id === localStorage.getItem("worktask-user")));
+      setMe(u.users.find((x: any) => x.id === getUserId()));
       setCounts(Object.fromEntries(TABS.map((t, i) => [t.key, all[i].items.length])));
     } catch {}
   }
@@ -39,8 +40,8 @@ export default function QueuePage() {
   }, [tab]);
 
   async function assign(id: number, toUserId?: string) {
-    try { await api(`/api/requests/${id}/assign`, { method: "POST", body: JSON.stringify({ toUserId }) }); load(); }
-    catch (e: any) { alert(e.message); }
+    try { await api(`/api/requests/${id}/assign`, { method: "POST", body: JSON.stringify({ toUserId }) }); setErr(""); load(); }
+    catch (e: any) { setErr(e.message); load(); }   // 목록이 오래돼 이미 배정된 경우
   }
   const members = (deptToHandlers[me?.department] ?? []).map((id: string) => SEED_USERS.find((s) => s.id === id)!);
 
@@ -68,6 +69,14 @@ export default function QueuePage() {
         </div>}
       </div>
 
+      {err && (
+        <div style={{ margin: "0 0 12px", padding: "9px 13px", borderRadius: 8, fontSize: 12.5,
+          background: "var(--red-soft)", border: "1px solid var(--red-line)", color: "var(--red-dark)",
+          display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontWeight: 700 }}>처리하지 못했습니다</span><span>{err}</span>
+          <button className="btn sm" style={{ marginLeft: "auto" }} onClick={() => setErr("")}>닫기</button>
+        </div>
+      )}
       <div className="card">
         <div className="tabs">
           {TABS.map((t) => (

@@ -47,6 +47,7 @@ export default function Page() {
   const [form, setForm] = useState<{ title: string; category: string; priority: string; summary: string }>(
     { title: "", category: CATEGORIES[0].key, priority: "normal", summary: "" });
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
   const timer = useRef<any>(null);
 
   function switchMode(m: Mode) {
@@ -71,7 +72,7 @@ export default function Page() {
         // 직접 입력: 한 줄 요약만 채운다 (설계서 §6)
         setForm((f) => ({ ...f, summary: d.suggestion.summary || "" }));
       }
-    } catch (e: any) { alert(e.message); } finally { setLoading(false); }
+    } catch (e: any) { setErr(e.message); } finally { setLoading(false); }
   }
 
   // 직접 입력에서는 내용 입력이 멎으면 요약·유사요청을 자동 갱신
@@ -84,12 +85,13 @@ export default function Page() {
   }, [text, mode]);
 
   function clearAll() {
-    setText(""); setSug(null); setSimilar([]);
+    setText(""); setSug(null); setSimilar([]); setErr("");
     setForm({ title: "", category: CATEGORIES[0].key, priority: "normal", summary: "" });
   }
   async function submit() {
-    if (!form.title.trim()) { alert("제목을 입력하세요"); return; }
-    if (!text.trim()) { alert("요청 내용을 입력하세요"); return; }
+    if (!form.title.trim()) { setErr("제목을 입력하세요"); return; }
+    if (!text.trim()) { setErr("요청 내용을 입력하세요"); return; }
+    setErr("");
     setBusy(true);
     try {
       const accepted = sug ? { title: form.title === sug.title, category: form.category === sug.category, urgency: form.priority === sug.urgency } : {};
@@ -97,12 +99,12 @@ export default function Page() {
         title: form.title, description: text, category: form.category, priority: form.priority,
         summary: form.summary, mode, aiSuggestion: mode === "ai" ? sug : null, acceptedFields: accepted }) });
       router.push(`/r/${d.id}`);
-    } catch (e: any) { alert(e.message); setBusy(false); }
+    } catch (e: any) { setErr(e.message); setBusy(false); }
   }
   async function join(id: number) {
     try { await api(`/api/requests/${id}/follow`, { method: "POST", body: JSON.stringify({ via: "register" }) });
       setJoined([...joined, id]);
-    } catch (e: any) { alert(e.message); }
+    } catch (e: any) { setErr(e.message); }
   }
 
   const fDept = deptOfCategory(form.category);
@@ -173,6 +175,10 @@ export default function Page() {
         </div>
       </div>
 
+      {err && (
+        <div style={{ padding: "9px 13px", borderRadius: 8, fontSize: 12.5,
+          background: "var(--red-soft)", border: "1px solid var(--red-line)", color: "var(--red-dark)" }}>{err}</div>
+      )}
       <div style={{ display: "flex", alignItems: "center", gap: 10, borderTop: "1px solid var(--line-2)", paddingTop: 14 }}>
         <span className="sm2">등록하면 {fDept}의 처리할 요청 목록에 접수되고, 진행 상황은 내 요청에서 확인할 수 있습니다</span>
         <button className="btn sm" style={{ marginLeft: "auto" }} onClick={clearAll}>지우기</button>

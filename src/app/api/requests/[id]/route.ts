@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { currentUser, detailDTO } from "@/lib/serve";
+import { bad, reqId } from "@/lib/validate";
+
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const user = await currentUser(req);
   const { id } = await ctx.params;
-  const dto = await detailDTO(Number(id), user?.id ?? "");
-  if (!dto) return NextResponse.json({ error: "not found" }, { status: 404 });
+  const rid = reqId(id);
+  if (!rid) return bad("요청을 찾을 수 없습니다", 404);
+  const dto = await detailDTO(rid, user?.id ?? "");
+  if (!dto) return bad("요청을 찾을 수 없습니다", 404);
   return NextResponse.json(dto);
 }
