@@ -121,7 +121,7 @@ export default function Page() {
         <input className="input" value={form.title} placeholder={mode === "manual" ? "무엇이 필요한지 한 줄로 적어주세요" : ""}
           onChange={(e) => setForm({ ...form, title: e.target.value })} />
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+      <div className="pair">
         <div>
           <div className="flabel">카테고리 {mode === "ai" && <span className="fnote">AI 분류</span>}</div>
           <select className="select" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
@@ -194,7 +194,7 @@ export default function Page() {
         ? "한 줄로 적어주시면 AI가 제목·카테고리·긴급도를 채워 담당 부서로 보냅니다."
         : "제목·카테고리·긴급도를 직접 고르고 내용을 적으면, 한 줄 요약만 AI가 만듭니다."}</p>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: 14, margin: "16px 0 18px", maxWidth: 780 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(min(100%,280px),1fr))", gap: 14, margin: "16px 0 18px", maxWidth: 780 }}>
         {MODES.map((m) => {
           const on = mode === m.v;
           return (
@@ -212,7 +212,7 @@ export default function Page() {
         })}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 300px", gap: 16, alignItems: "start" }}>
+      <div className="cols">
         <div style={{ display: "grid", gap: 14 }}>
           {/* AI 모드에서만 상단 한 줄 입력 카드 */}
           {mode === "ai" && (
@@ -255,7 +255,7 @@ export default function Page() {
           )}
         </div>
 
-        <aside className="card" style={{ position: "sticky", top: 64 }}>
+        <aside className="card side">
           <div style={{ padding: "14px 16px 11px", borderBottom: "1px solid var(--line-2)" }}>
             <div style={{ fontSize: 13, fontWeight: 700 }}>비슷한 요청이 있어요</div>
             <div className="sm2" style={{ marginTop: 3, lineHeight: 1.5 }}>참여하면 중복 접수 대신 같은 요청의 참여자로 기록됩니다</div>

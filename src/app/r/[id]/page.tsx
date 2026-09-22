@@ -137,7 +137,7 @@ export default function DetailPage({ params }: { params: Promise<{ id: string }>
           : "보류·반려·완료는 사유 또는 처리 내역 입력이 필요합니다. 입력한 내용은 요청자와 참여자에게 그대로 전달되고 타임라인에 남습니다."}
       </p>
 
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 288px", gap: 16, alignItems: "start" }}>
+      <div className="cols narrow">
         <div style={{ display: "grid", gap: 14 }}>
           {/* 강조 박스 */}
           {d.result && <div className="card" style={{ padding: 16, borderColor: "#cdebd9", background: "#f5fcf8" }}>
@@ -199,7 +199,7 @@ export default function DetailPage({ params }: { params: Promise<{ id: string }>
           </div>
         </div>
 
-        <aside style={{ display: "grid", gap: 14, position: "sticky", top: 64 }}>
+        <aside className="side" style={{ display: "grid", gap: 14 }}>
           <div className="card" style={{ padding: 16 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: 12.5, fontWeight: 700 }}>요청자 · 참여자 {d.followers.length + 1}명</span>

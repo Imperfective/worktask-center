@@ -46,7 +46,7 @@ export default function QueuePage() {
   const members = (deptToHandlers[me?.department] ?? []).map((id: string) => SEED_USERS.find((s) => s.id === id)!);
 
   const Stat = ({ l, v, red }: { l: string; v: any; red?: boolean }) => (
-    <div className="card" style={{ padding: "10px 16px", minWidth: 104 }}>
+    <div className="card stat">
       <div className="sm2">{l}</div>
       <div style={{ fontSize: 17, fontWeight: 700, marginTop: 2, color: red && v !== "0건" ? "var(--red)" : "var(--ink)" }}>{v}</div>
     </div>
@@ -62,7 +62,7 @@ export default function QueuePage() {
           </div>
           <p className="sub">{me?.department}으로 접수된 요청 · 정렬: 긴급도 → 접수순</p>
         </div>
-        {stats && <div style={{ display: "flex", gap: 10, marginLeft: "auto" }}>
+        {stats && <div className="statrow">
           <Stat l="오늘 접수" v={`${stats.todayCount}건`} />
           <Stat l="평균 처리 시간" v={`${stats.avgResolveHours}시간`} />
           <Stat l="미배정 긴급" v={`${stats.unassignedUrgent}건`} red />
@@ -88,18 +88,22 @@ export default function QueuePage() {
         {items.length === 0 ? (
           <p className="sm2" style={{ padding: "44px 0", textAlign: "center" }}>이 탭에 해당하는 요청이 없습니다</p>
         ) : (
-          <div style={{ overflowX: "auto" }}>
+          <div className="tablewrap">
             <table>
               <thead><tr>
-                <th style={{ width: 72 }}>ID</th><th>제목</th><th style={{ width: 90 }}>카테고리</th>
-                <th style={{ width: 62 }}>긴급도</th><th style={{ width: 110 }}>요청자</th>
-                <th style={{ width: 58 }}>참여자</th><th style={{ width: 104 }}>접수 시각</th><th style={{ width: 190 }}>액션</th>
+                <th style={{ width: 72 }} className="hide-sm">ID</th><th>제목</th>
+                <th style={{ width: 90 }} className="hide-sm">카테고리</th>
+                <th style={{ width: 62 }}>긴급도</th>
+                <th style={{ width: 110 }} className="hide-sm">요청자</th>
+                <th style={{ width: 58 }} className="hide-sm">참여자</th>
+                <th style={{ width: 104 }} className="hide-sm">접수 시각</th>
+                <th style={{ width: 190 }}>액션</th>
               </tr></thead>
               <tbody>
                 {items.map((r) => (
                   <tr key={r.id} className={`row ${r.priority === "urgent" && r.status === "SUBMITTED" ? "urgent" : ""}`}
                       onClick={() => router.push(`/r/${r.id}`)}>
-                    <td className="code">{code(r.id)}</td>
+                    <td className="code hide-sm">{code(r.id)}</td>
                     <td>
                       <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
                         <span className="tt">{r.title}</span>
@@ -109,16 +113,16 @@ export default function QueuePage() {
                         <span className="pillbadge" style={{ background: "var(--amber-soft)", color: "var(--amber-dark)", marginTop: 6 }}>
                           보류 사유: {r.holdReason}</span>)}
                     </td>
-                    <td className="sm2">{categoryLabel(r.category)}</td>
+                    <td className="sm2 hide-sm">{categoryLabel(r.category)}</td>
                     <td><PriorityText p={r.priority} /></td>
-                    <td style={{ fontSize: 13 }}>{r.requesterName}</td>
-                    <td className="sm2">{r.followerCount}명</td>
-                    <td className="sm2" style={{ fontVariantNumeric: "tabular-nums" }}>{fmtDate(r.createdAt)}</td>
+                    <td style={{ fontSize: 13 }} className="hide-sm">{r.requesterName}</td>
+                    <td className="sm2 hide-sm">{r.followerCount}명</td>
+                    <td className="sm2 hide-sm" style={{ fontVariantNumeric: "tabular-nums" }}>{fmtDate(r.createdAt)}</td>
                     <td onClick={(e) => e.stopPropagation()}>
                       {r.status === "SUBMITTED" ? (
                         <div style={{ display: "flex", gap: 6 }}>
                           <button className={`btn sm ${r.priority === "urgent" ? "prim" : "ghost-red"}`} onClick={() => assign(r.id)}>내가 맡기</button>
-                          <select className="select" style={{ width: "auto", padding: "5px 8px", fontSize: 12.5 }}
+                          <select className="select hide-sm" style={{ width: "auto", padding: "5px 8px", fontSize: 12.5 }}
                             defaultValue="" onChange={(e) => e.target.value && assign(r.id, e.target.value)}>
                             <option value="">부서원 배정</option>
                             {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}

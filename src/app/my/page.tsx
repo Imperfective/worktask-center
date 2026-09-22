@@ -60,16 +60,19 @@ export default function MyPage() {
         {items.length === 0 ? (
           <p className="sm2" style={{ padding: "44px 0", textAlign: "center" }}>이 탭에 해당하는 요청이 없습니다</p>
         ) : (
-          <div style={{ overflowX: "auto" }}>
+          <div className="tablewrap">
             <table>
               <thead><tr>
-                <th style={{ width: 72 }}>ID</th><th>제목</th><th style={{ width: 92 }}>상태</th>
-                <th style={{ width: 120 }}>담당자</th><th style={{ width: 70 }}>긴급도</th><th style={{ width: 110 }}>마지막 업데이트</th>
+                <th style={{ width: 72 }} className="hide-sm">ID</th><th>제목</th>
+                <th style={{ width: 92 }}>상태</th>
+                <th style={{ width: 120 }} className="hide-sm">담당자</th>
+                <th style={{ width: 70 }} className="hide-sm">긴급도</th>
+                <th style={{ width: 110 }} className="hide-sm">마지막 업데이트</th>
               </tr></thead>
               <tbody>
                 {items.map((r) => (
                   <tr key={r.id} className="row" onClick={() => router.push(`/r/${r.id}`)}>
-                    <td className="code">{code(r.id)}</td>
+                    <td className="code hide-sm">{code(r.id)}</td>
                     <td>
                       <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
                         <span className="tt">{r.title}</span>
@@ -81,11 +84,11 @@ export default function MyPage() {
                         </span>)}
                     </td>
                     <td><StatusBadge s={r.status} /></td>
-                    <td>{r.assigneeName
+                    <td className="hide-sm">{r.assigneeName
                       ? <span style={{ fontSize: 13 }}>{r.assigneeName} <span className="sm2">{r.department}</span></span>
                       : <span className="sm2">미배정</span>}</td>
-                    <td><PriorityText p={r.priority} /></td>
-                    <td className="sm2" style={{ fontVariantNumeric: "tabular-nums" }}>{fmtDate(r.updatedAt)}</td>
+                    <td className="hide-sm"><PriorityText p={r.priority} /></td>
+                    <td className="sm2 hide-sm" style={{ fontVariantNumeric: "tabular-nums" }}>{fmtDate(r.updatedAt)}</td>
                   </tr>
                 ))}
               </tbody>
