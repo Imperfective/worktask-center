@@ -72,7 +72,7 @@ export default function TopBar() {
         <div className="top-right">
           <span className="today hide-sm">{today}</span>
           <span className="poc hide-sm">PoC</span>
-          <div ref={box} style={{ position: "relative" }}>
+          <div ref={box} className="userwrap">
             <button className="userchip" onClick={(e) => { e.stopPropagation(); setOpen(!open); }}>
               <span className="avatar">{initial(me?.name ?? "")}</span>
               <span className="nm">{me?.name ?? "…"}</span>
