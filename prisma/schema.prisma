@@ -1,0 +1,70 @@
+// 설계서 §8 데이터 모델. requests가 현재 상태를 들고,
+// request_events가 모든 변경 이력을 추가 전용(append-only)으로 쌓는다.
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider = "sqlite"        // 설계서: SQLite. Postgres 전환 시 provider/URL만 교체
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String  @id
+  name        String
+  department  String                       // IT·총무·시설·영업·디자인
+  isHandler   Boolean @default(false)
+  requested   Request[] @relation("requester")
+  assigned    Request[] @relation("assignee")
+  events      RequestEvent[]
+  follows     RequestFollower[]
+}
+
+model Request {
+  id            Int      @id @default(autoincrement())   // 순번 = 요청 ID
+  title         String
+  description   String
+  summary       String   @default("")                    // AI 한 줄 요약(읽기 전용)
+  category      String
+  department    String
+  priority      String                                    // low·normal·high·urgent
+  status        String                                    // 6개 상태 문자열
+  requesterId   String
+  assigneeId    String?
+  duplicateOfId Int?
+  holdReason    String?                                   // 상세 강조 박스용 복사본(원본은 이벤트)
+  holdResumeDate String?
+  result        String?                                   // 처리 내역
+  rejectReason  String?
+  aiSuggestion  String?                                   // JSON: title,category,urgency,urgency_reason,summary,similar_ids
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  resolvedAt    DateTime?
+
+  requester  User  @relation("requester", fields: [requesterId], references: [id])
+  assignee   User? @relation("assignee",  fields: [assigneeId],  references: [id])
+  original   Request?  @relation("dup", fields: [duplicateOfId], references: [id])
+  duplicates Request[] @relation("dup")
+  events     RequestEvent[]
+  followers  RequestFollower[]
+}
+
+model RequestEvent {
+  id        Int      @id @default(autoincrement())
+  requestId Int
+  actorId   String
+  type      String                          // CREATED·ASSIGNED·STATUS_CHANGED·PRIORITY_CHANGED·COMMENTED·FOLLOWED·AI_SUGGESTED
+  payload   String                          // JSON
+  createdAt DateTime @default(now())
+  request   Request  @relation(fields: [requestId], references: [id])
+  actor     User     @relation(fields: [actorId], references: [id])
+}
+
+model RequestFollower {
+  requestId Int
+  userId    String
+  via       String                          // register·detail·duplicate
+  createdAt DateTime @default(now())
+  request   Request @relation(fields: [requestId], references: [id])
+  user      User    @relation(fields: [userId], references: [id])
+  @@id([requestId, userId])
+}

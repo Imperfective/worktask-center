@@ -1,0 +1,66 @@
+# AI 활용 기록
+
+AI 코딩 도구에 무엇을 맡겼고, **결과에서 무엇을 고쳤는지**를 남긴다.
+고친 사례가 이 문서의 핵심이다.
+
+---
+
+## 맡긴 작업
+
+| 작업 | 도구 | 결과 |
+|---|---|---|
+| 설계서 → 도메인 상수·전이 맵 코드화 | Claude Code | 대부분 사용, 아래 수정 |
+| Prisma 스키마·시드 데이터 | Claude Code | 사용 |
+| API 라우트 9개 | Claude Code | 사용, 아래 수정 |
+| 화면 4개 (React) | Claude Code | 사용 |
+| Docker 패키징·배포 | Claude Code | 1차 실패 후 재설계 |
+| 요청 분류·긴급도 판단 (런타임) | Ollama `qwen2.5:1.5b` | 서비스 기능으로 사용 |
+
+---
+
+## AI 결과에서 고친 것
+
+### 1. 타임라인 행위자가 틀렸다 — 중복 반려 시
+중복으로 반려하면 반려된 요청의 요청자가 원본 요청의 참여자로 자동 추가된다.
+이때 생성한 `FOLLOWED` 이벤트의 **행위자를 반려를 실행한 담당자로** 기록하고 있었다.
+
+```diff
+- await logEvent(duplicateOfId, user.id,      EVENT.FOLLOWED, { user_id: r.requesterId, ... });
++ // 행위자는 담당자가 아니라 참여하게 된 요청자 본인 (타임라인 표기 정확성)
++ await logEvent(duplicateOfId, r.requesterId, EVENT.FOLLOWED, { user_id: r.requesterId, ... });
+```
+
+화면에 `박시설 요청에 참여했습니다`로 떠서 발견했다. 참여한 사람은 이하나다.
+**기록의 정확성이 이 PoC의 목표 중 하나인데, 사람을 잘못 적으면 기록이 아니라 오해가 된다.**
+
+### 2. 런타임에 Prisma CLI를 돌리려 했다
+첫 Dockerfile은 컨테이너 기동 시 `prisma db push`와 시드를 실행하게 되어 있었다.
+Next.js standalone 산출물에는 CLI 의존성 트리가 없어 `MODULE_NOT_FOUND`로 재시작 루프에 빠졌다.
+
+빌드 시점에 스키마·시드까지 끝낸 DB를 템플릿으로 굽고 런타임에는 복사만 하도록 바꿨다.
+결과적으로 이미지가 작아지고 기동이 72ms로 줄었다. → DECISIONS #11
+
+### 3. 배포 대상 서버를 빈 서버로 가정했다
+처음에 systemd로 Caddy를 설치해 80/443을 잡으려 했다. 그 서버는 이미 Docker Caddy가
+다른 서비스 두 개를 운영 중이었고, 포트 충돌로 계속 실패했다.
+**확인 없이 환경을 가정한 것이 원인**이다. 기존 Caddy 설정에 사이트 블록만 추가하는 방식으로 바꿨고,
+설정 검증(`caddy validate`)을 먼저 돌려 기존 사이트가 끊기지 않는 것을 확인한 뒤 reload 했다.
+
+### 4. 타입을 좁게 추론해 빌드가 깨졌다
+규칙 기반 분류기에서 `let best = CATEGORIES[0].key`가 리터럴 타입 `"facility_repair"`로 좁혀져
+다른 카테고리를 대입할 수 없었다. `let best: string`으로 명시.
+
+### 5. Prisma 한 줄 블록 문법
+`generator client { provider = "..." }`를 한 줄로 썼는데 Prisma가 거부했다. 여러 줄로 수정.
+
+---
+
+## 런타임 AI(Ollama)를 검증한 방법
+
+- 실제 호출: `프린터에서 종이가 자꾸 걸립니다. 급하게 출력해야 해요`
+  → `출처=ollama · 카테고리=it_device(IT-장비) · 긴급도=high` ✓
+- **fallback 경로도 함께 확인**: Ollama 없이 같은 입력을 넣어
+  `출처=rule · facility_repair · urgent`로 동작하는 것을 확인했다.
+  설계 목표가 "AI가 없어도 같은 흐름이 동작한다"였으므로, 두 경로를 모두 실측해야 의미가 있다.
+- 프롬프트는 카테고리 key 목록과 출력 JSON 스키마를 시스템 메시지에 고정하고
+  `format: "json"`, `temperature: 0.1`로 두었다. 파싱 실패·미지원 카테고리·타임아웃이면 fallback으로 넘어간다.

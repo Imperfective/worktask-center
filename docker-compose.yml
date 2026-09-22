@@ -1,0 +1,37 @@
+services:
+  worktask-app:
+    build: .
+    container_name: worktask-app
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: "file:/app/data/app.db"
+      OLLAMA_URL: "http://worktask-ollama:11434"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-qwen2.5:1.5b}"
+      AI_TIMEOUT_MS: "20000"
+    volumes:
+      - worktask-data:/app/data
+    networks: [web, worktask]
+    # 포트를 열지 않는다 — 기존 deepvoice-caddy 가 도커 네트워크로 직접 붙는다
+
+  worktask-ollama:
+    image: ollama/ollama:latest
+    container_name: worktask-ollama
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama
+    networks: [worktask]
+    # CPU 추론. 메모리 상한을 둬 기존 서비스를 압박하지 않게 한다
+    deploy:
+      resources:
+        limits:
+          memory: 3g
+
+volumes:
+  worktask-data:
+  ollama-models:
+
+networks:
+  worktask:
+  web:
+    external: true
+    name: deepvoice-net              # 기존 caddy 가 속한 네트워크
