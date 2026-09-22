@@ -1,156 +1,218 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, categoryLabel } from "@/lib/ui";
+import { api, categoryLabel, code, statusLabel } from "@/lib/ui";
 import { CATEGORIES, PRIORITY, deptOfCategory } from "@/lib/domain";
-import { StatusBadge, PriorityBadge } from "@/components/Badges";
+import { StatusBadge } from "@/components/Badges";
 
-type Mode = null | "ai" | "manual";
-const EXAMPLES = ["3층 회의실 프로젝터가 안 켜져요. 오후 3시 발표 전에 봐주세요",
-  "그룹웨어 접속이 안 됩니다", "노트북 배터리가 너무 빨리 닳아요", "복합기 토너 교체 부탁드려요"];
+type Mode = "ai" | "manual";
+const EXAMPLES = [
+  { label: "프로젝터 고장", text: "3층 회의실 프로젝터가 안 켜져요. 오후 3시 발표 전에 봐주세요" },
+  { label: "VPN 계정", text: "VPN 계정이 잠겨서 로그인이 안 됩니다" },
+  { label: "에어컨", text: "4층 사무실 에어컨 냉방이 거의 안 됩니다" },
+];
+const URGENCIES: { v: string; label: string }[] = [
+  { v: "low", label: "낮음" }, { v: "normal", label: "보통" },
+  { v: "high", label: "높음" }, { v: "urgent", label: "긴급" },
+];
 
-export default function RequestPage() {
+export default function Page() {
   const router = useRouter();
-  const [mode, setMode] = useState<Mode>(null);
+  const [mode, setMode] = useState<Mode>("ai");
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
   const [sug, setSug] = useState<any>(null);
   const [similar, setSimilar] = useState<any[]>([]);
-  // 확정 폼 값
+  const [joined, setJoined] = useState<number[]>([]);
   const [form, setForm] = useState({ title: "", category: "", priority: "normal", summary: "" });
   const [busy, setBusy] = useState(false);
 
-  async function analyze() {
-    if (!text.trim()) return;
-    setLoading(true); setSug(null);
+  async function analyze(t?: string) {
+    const body = (t ?? text).trim();
+    if (!body) return;
+    setLoading(true);
     try {
-      const d = await api("/api/ai/analyze", { method: "POST", body: JSON.stringify({ text, mode }) });
+      const d = await api("/api/ai/analyze", { method: "POST", body: JSON.stringify({ text: body, mode }) });
       setSug(d.suggestion); setSimilar(d.similar);
       setForm({
-        title: d.suggestion.title || "", category: d.suggestion.category || "",
+        title: d.suggestion.title || "", category: d.suggestion.category || CATEGORIES[0].key,
         priority: d.suggestion.urgency || "normal", summary: d.suggestion.summary || "",
       });
     } catch (e: any) { alert(e.message); } finally { setLoading(false); }
   }
+  function pickExample(ex: typeof EXAMPLES[number]) { setText(ex.text); analyze(ex.text); }
+  function clearAll() { setText(""); setSug(null); setSimilar([]); }
 
   async function submit() {
     if (!form.title.trim() || !form.category) { alert("제목과 카테고리를 확인하세요"); return; }
     setBusy(true);
     try {
-      const accepted = sug ? {
-        title: form.title === sug.title, category: form.category === sug.category, urgency: form.priority === sug.urgency,
-      } : {};
+      const accepted = sug ? { title: form.title === sug.title, category: form.category === sug.category, urgency: form.priority === sug.urgency } : {};
       const d = await api("/api/requests", { method: "POST", body: JSON.stringify({
         title: form.title, description: text, category: form.category, priority: form.priority,
-        summary: form.summary, mode, aiSuggestion: sug, acceptedFields: accepted,
-      })});
+        summary: form.summary, mode, aiSuggestion: sug, acceptedFields: accepted }) });
       router.push(`/r/${d.id}`);
     } catch (e: any) { alert(e.message); setBusy(false); }
   }
-
-  async function joinSimilar(id: number) {
+  async function join(id: number) {
     try { await api(`/api/requests/${id}/follow`, { method: "POST", body: JSON.stringify({ via: "register" }) });
-      router.push(`/r/${id}`);
+      setJoined([...joined, id]);
     } catch (e: any) { alert(e.message); }
   }
 
-  // 입구 선택 화면
-  if (!mode) return (
-    <div>
-      <h1 style={{ fontSize: 22, margin: "6px 0 4px" }}>무엇을 도와드릴까요?</h1>
-      <p className="muted" style={{ margin: "0 0 22px" }}>요청을 등록하면 접수 번호가 부여되고, 담당 부서 큐에 바로 올라갑니다.</p>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 16 }}>
-        <button className="card" onClick={() => setMode("ai")} style={{ textAlign: "left", padding: 22, cursor: "pointer" }}>
-          <div style={{ fontSize: 22, marginBottom: 8 }}>✨</div>
-          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 6 }}>AI 자동 작성</div>
-          <div className="muted" style={{ fontSize: 13, lineHeight: 1.6 }}>겪고 있는 상황을 한 줄로 적으면 제목·카테고리·긴급도를 자동으로 제안합니다. 확인·수정 후 등록하세요.</div>
-        </button>
-        <button className="card" onClick={() => setMode("manual")} style={{ textAlign: "left", padding: 22, cursor: "pointer" }}>
-          <div style={{ fontSize: 22, marginBottom: 8 }}>✍️</div>
-          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 6 }}>직접 입력</div>
-          <div className="muted" style={{ fontSize: 13, lineHeight: 1.6 }}>항목을 직접 고르고 싶다면 이쪽. 제목·카테고리·긴급도를 스스로 정하고, 한 줄 요약만 자동으로 만듭니다.</div>
-        </button>
-      </div>
-    </div>
-  );
+  const fDept = form.category ? deptOfCategory(form.category) : "—";
+  const MODES = [
+    { v: "ai" as Mode, label: "AI 자동 작성", desc: "한 줄만 적으면 제목·카테고리·긴급도까지 채워집니다" },
+    { v: "manual" as Mode, label: "직접 입력", desc: "항목을 직접 고르고, 한 줄 요약만 AI가 만듭니다" },
+  ];
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 320px", gap: 18, alignItems: "start" }}>
-      <div style={{ display: "grid", gap: 16 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <button className="btn sm" onClick={() => { setMode(null); setSug(null); setText(""); }}>← 뒤로</button>
-          <h1 style={{ fontSize: 19, margin: 0 }}>{mode === "ai" ? "AI 자동 작성" : "직접 입력"}</h1>
-        </div>
+    <div>
+      <h1 className="h1">무엇을 도와드릴까요?</h1>
+      <p className="sub">{mode === "ai"
+        ? "한 줄로 적어주시면 AI가 제목·카테고리·긴급도를 채워 담당 부서로 보냅니다."
+        : "항목을 직접 고르고 내용을 적어주세요. 한 줄 요약만 AI가 만듭니다."}</p>
 
-        <div className="card" style={{ padding: 18 }}>
-          <label className="label">{mode === "ai" ? "겪고 있는 상황을 한 줄로 적어주세요" : "요청 내용"}</label>
-          <textarea className="textarea" value={text} onChange={(e) => setText(e.target.value)}
-            placeholder="예: 3층 회의실 프로젝터가 안 켜져요. 오후 3시 발표 전에 봐주세요" style={{ minHeight: 90 }} />
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "10px 0 0" }}>
-            {EXAMPLES.map((ex) => <button key={ex} className="chip" onClick={() => setText(ex)}>{ex.slice(0, 22)}…</button>)}
-          </div>
-          <div style={{ marginTop: 12 }}>
-            <button className="btn prim" onClick={analyze} disabled={loading || !text.trim()}>
-              {loading ? "분석 중…" : mode === "ai" ? "✨ AI 제안 받기" : "요약 만들기"}
-            </button>
-          </div>
-        </div>
-
-        {sug && (
-          <div className="card" style={{ padding: 18 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-              <strong style={{ fontSize: 14.5 }}>{mode === "ai" ? "AI 제안" : "입력 확인"}</strong>
-              <span className="badge" style={{ background: "var(--accent-soft)", color: "var(--accent)" }}>
-                {sug.source === "ollama" ? "AI 분류" : "규칙 기반"}
+      {/* 입구 카드 2개 */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: 14, margin: "16px 0 18px", maxWidth: 780 }}>
+        {MODES.map((m) => {
+          const on = mode === m.v;
+          return (
+            <button key={m.v} onClick={() => { setMode(m.v); setSug(null); }}
+              style={{ display: "flex", gap: 12, alignItems: "flex-start", textAlign: "left", cursor: "pointer",
+                border: `1px solid ${on ? "var(--red)" : "var(--line)"}`, background: on ? "var(--red-soft)" : "#fff",
+                borderRadius: 10, padding: "14px 16px", fontFamily: "inherit" }}>
+              <span style={{ width: 26, height: 26, borderRadius: 7, flex: "none", display: "grid", placeItems: "center",
+                background: on ? "#fff" : "var(--line-3)" }}>
+                {on ? <span style={{ width: 11, height: 11, background: "var(--red)", transform: "rotate(45deg)", borderRadius: 2, display: "block" }} />
+                    : <span style={{ display: "grid", gap: 2 }}>
+                        {[10, 8, 6].map((w, i) => <i key={i} style={{ width: w, height: 1.6, background: "var(--muted-2)", display: "block", borderRadius: 1 }} />)}
+                      </span>}
               </span>
-              <span className="muted" style={{ fontSize: 12 }}>수정할 수 있습니다</span>
-            </div>
-            <div style={{ display: "grid", gap: 12, marginTop: 10 }}>
-              <div><label className="label">제목</label>
-                <input className="input" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                <div><label className="label">카테고리 → 담당 부서</label>
-                  <select className="select" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
-                    <option value="">선택</option>
-                    {CATEGORIES.map((c) => <option key={c.key} value={c.key}>{c.label} ({c.dept})</option>)}
-                  </select></div>
-                <div><label className="label">긴급도</label>
-                  <select className="select" value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })}>
-                    {Object.entries(PRIORITY).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                  </select></div>
-              </div>
-              {sug.urgency_reason && <div className="muted" style={{ fontSize: 12.5, background: "var(--line-2)", padding: "8px 11px", borderRadius: 7 }}>
-                💡 {sug.urgency_reason}</div>}
-              <div><label className="label">한 줄 요약 <span className="muted">(읽기 전용)</span></label>
-                <input className="input" value={form.summary} readOnly style={{ background: "var(--line-2)", color: "var(--ink-2)" }} /></div>
-              <div><button className="btn prim" onClick={submit} disabled={busy} style={{ justifySelf: "start" }}>{busy ? "등록 중…" : "요청 등록"}</button></div>
-            </div>
-          </div>
-        )}
+              <span>
+                <span style={{ display: "block", fontSize: 14, fontWeight: 700, color: on ? "var(--red)" : "var(--ink)" }}>{m.label}</span>
+                <span style={{ display: "block", fontSize: 12, color: "var(--muted)", marginTop: 3 }}>{m.desc}</span>
+              </span>
+            </button>
+          );
+        })}
       </div>
 
-      <aside className="card" style={{ padding: 16, position: "sticky", top: 72 }}>
-        <strong style={{ fontSize: 14 }}>비슷한 요청이 있어요</strong>
-        <p className="muted" style={{ fontSize: 12, margin: "4px 0 12px", lineHeight: 1.55 }}>
-          같은 문제라면 새로 만들지 말고 기존 요청에 참여하세요.</p>
-        {!sug ? <p className="muted" style={{ fontSize: 12.5 }}>내용을 입력하면 유사한 열린 요청을 보여드립니다.</p>
-          : similar.length === 0 ? <p className="muted" style={{ fontSize: 12.5 }}>비슷한 요청이 없습니다. 새로 등록하세요.</p>
-          : <div style={{ display: "grid", gap: 10 }}>
-            {similar.map((s) => (
-              <div key={s.id} style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 11 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 6 }}>
-                  <span style={{ fontSize: 13, fontWeight: 600 }}>#{s.id} {s.title}</span>
-                  <span className="badge" style={{ background: "var(--accent-soft)", color: "var(--accent)" }}>{s.score}%</span>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 300px", gap: 16, alignItems: "start" }}>
+        <div style={{ display: "grid", gap: 14 }}>
+          {/* 입력 카드 */}
+          <div className="card">
+            <div style={{ padding: "14px 18px 0", fontSize: 12.5, fontWeight: 700 }}>
+              {mode === "ai" ? "요청 내용 한 줄" : "요청 내용"}
+            </div>
+            <textarea value={text} onChange={(e) => setText(e.target.value.slice(0, 500))}
+              onBlur={() => text.trim() && !sug && analyze()}
+              placeholder="예) 3층 회의실 프로젝터가 안 켜져요. 오후 3시 발표 전에 봐주세요."
+              style={{ width: "100%", border: "none", outline: "none", resize: "none", minHeight: 78,
+                padding: "10px 18px 6px", fontSize: 13.5, fontFamily: "inherit", lineHeight: 1.6, color: "var(--ink)" }} />
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 18px 13px", borderTop: "1px solid var(--line-2)", flexWrap: "wrap" }}>
+              <span className="sm2">예시</span>
+              {EXAMPLES.map((ex) => <button key={ex.label} className="chip" onClick={() => pickExample(ex)}>{ex.label}</button>)}
+              <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--muted-2)", fontVariantNumeric: "tabular-nums" }}>{text.length} / 500</span>
+            </div>
+          </div>
+
+          {!sug && text.trim() && (
+            <button className="btn prim" style={{ justifySelf: "start" }} onClick={() => analyze()} disabled={loading}>
+              {loading ? "분석 중…" : mode === "ai" ? "AI 제안 받기" : "요약 만들기"}</button>
+          )}
+
+          {/* AI 제안 카드 */}
+          {sug && (
+            <div className="card" style={{ overflow: "hidden" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "10px 18px",
+                background: "var(--red-soft)", borderBottom: "1px solid var(--red-line)" }}>
+                <span className="pillbadge" style={{ background: "var(--red)", color: "#fff" }}>
+                  {mode === "ai" ? "AI 제안" : "입력 확인"}</span>
+                <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ink-2)" }}>
+                  {mode === "ai" ? "AI가 제안했습니다. 확인 후 수정하세요" : "항목을 직접 채워주세요"}</span>
+                <span style={{ marginLeft: "auto", fontSize: 11.5, color: "var(--muted)" }}>
+                  {sug.source === "ollama" ? "로컬 AI 분석" : "입력 내용에서 추출"}</span>
+              </div>
+              <div style={{ padding: 18, display: "grid", gap: 15 }}>
+                <div>
+                  <div className="flabel">제목 <span className="fnote">AI 작성 · 수정 가능</span></div>
+                  <input className="input" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, margin: "7px 0 9px", flexWrap: "wrap" }}>
-                  <StatusBadge s={s.status} /><PriorityBadge p={s.priority} />
-                  <span className="muted" style={{ fontSize: 11.5 }}>담당 {s.assigneeName ?? "미배정"} · 참여 {s.followerCount}</span>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+                  <div>
+                    <div className="flabel">카테고리 <span className="fnote">{mode === "ai" ? "AI 분류" : ""}</span></div>
+                    <select className="select" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
+                      {CATEGORIES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <div className="flabel">담당 부서</div>
+                    <div className="input" style={{ background: "var(--bg-2)", display: "flex", alignItems: "center", gap: 8 }}>
+                      <b style={{ fontSize: 13 }}>{fDept}</b>
+                      <span className="fnote">카테고리에 따라 자동 배정</span>
+                    </div>
+                  </div>
                 </div>
-                <button className="btn sm prim" style={{ width: "100%", justifyContent: "center" }} onClick={() => joinSimilar(s.id)}>같은 문제예요, 참여하기</button>
+                <div>
+                  <div className="flabel">긴급도 <span className="fnote">{mode === "ai" ? "AI 판단 · 수정 가능" : ""}</span>
+                    {sug.urgency_reason && <span className="fnote" style={{ marginLeft: 2 }}>{sug.urgency_reason}</span>}</div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    {URGENCIES.map((u) => {
+                      const on = form.priority === u.v;
+                      const isU = u.v === "urgent";
+                      return <button key={u.v} onClick={() => setForm({ ...form, priority: u.v })}
+                        style={{ padding: "7px 18px", borderRadius: 7, fontSize: 13, cursor: "pointer", fontFamily: "inherit",
+                          fontWeight: on ? 700 : 500,
+                          border: `1px solid ${on ? "var(--red)" : "var(--line)"}`,
+                          background: on ? "var(--red)" : "#fff",
+                          color: on ? "#fff" : isU ? "var(--red)" : "var(--ink-3)" }}>{u.label}</button>;
+                    })}
+                  </div>
+                </div>
+                <div>
+                  <div className="flabel">한 줄 요약 <span className="pillbadge" style={{ background: "var(--red-soft)", color: "var(--red)" }}>AI 자동 생성</span>
+                    <span className="fnote">요청 내용을 분석해 목록에 쓰입니다</span></div>
+                  <div className="input" style={{ background: "var(--red-soft)", borderColor: "var(--red-line)", color: "var(--ink-2)" }}>
+                    {form.summary || "—"}</div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, borderTop: "1px solid var(--line-2)", paddingTop: 14 }}>
+                  <span className="sm2">등록하면 {fDept}의 처리할 요청 목록에 접수되고, 진행 상황은 내 요청에서 확인할 수 있습니다</span>
+                  <button className="btn sm" style={{ marginLeft: "auto" }} onClick={clearAll}>지우기</button>
+                  <button className="btn prim sm" onClick={submit} disabled={busy}>{busy ? "등록 중…" : "요청 등록"}</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* 유사 요청 패널 */}
+        <aside className="card" style={{ position: "sticky", top: 64 }}>
+          <div style={{ padding: "14px 16px 11px", borderBottom: "1px solid var(--line-2)" }}>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>비슷한 요청이 있어요</div>
+            <div className="sm2" style={{ marginTop: 3, lineHeight: 1.5 }}>참여하면 중복 접수 대신 같은 요청의 참여자로 기록됩니다</div>
+          </div>
+          <div style={{ padding: 14 }}>
+            {similar.length === 0 ? (
+              <p className="sm2" style={{ textAlign: "center", padding: "26px 0", lineHeight: 1.7, margin: 0 }}>
+                입력한 내용과 비슷한<br />기존 요청이 없습니다</p>
+            ) : similar.map((s) => (
+              <div key={s.id} style={{ borderBottom: "1px solid var(--line-2)", paddingBottom: 12, marginBottom: 12 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                  <span className="code">{code(s.id)}</span>
+                  <StatusBadge s={s.status} />
+                  <span className="sm2" style={{ marginLeft: "auto" }}>유사도 {s.score}%</span>
+                </div>
+                <div className="tt" style={{ margin: "7px 0 4px" }}>{s.title}</div>
+                <div className="sm2">담당 {s.assigneeName ?? "미배정"} · 참여자 {s.followerCount}명</div>
+                <button className="btn sm" style={{ width: "100%", marginTop: 9 }}
+                  disabled={joined.includes(s.id)} onClick={() => join(s.id)}>
+                  {joined.includes(s.id) ? "참여 중" : "같은 문제예요, 참여하기"}</button>
               </div>
             ))}
-          </div>}
-      </aside>
+          </div>
+        </aside>
+      </div>
     </div>
   );
 }

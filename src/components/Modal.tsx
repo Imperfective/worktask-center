@@ -15,13 +15,13 @@ export default function Modal({ title, fields, submitLabel, onSubmit, onClose }:
     try { await onSubmit(v); } catch (e: any) { setErr(e.message); setBusy(false); }
   }
   return (
-    <div className="modal-bg" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+    <div className="mbg" onClick={onClose}>
+      <div className="mbox" onClick={(e) => e.stopPropagation()}>
         <h3 style={{ margin: "0 0 14px", fontSize: 16 }}>{title}</h3>
         <div style={{ display: "grid", gap: 12 }}>
           {fields.map((f) => (
             <div key={f.key}>
-              <label className="label">{f.label}{f.required && <span style={{ color: "var(--reject)" }}> *</span>}</label>
+              <div className="flabel">{f.label}{f.required && <span style={{ color: "var(--red)" }}>*</span>}</div>
               {f.type === "textarea"
                 ? <textarea className="textarea" placeholder={f.placeholder} value={v[f.key] ?? ""} onChange={(e) => setV({ ...v, [f.key]: e.target.value })} />
                 : f.type === "select"
@@ -32,7 +32,7 @@ export default function Modal({ title, fields, submitLabel, onSubmit, onClose }:
                 : <input className="input" type={f.type === "date" ? "date" : "text"} placeholder={f.placeholder} value={v[f.key] ?? ""} onChange={(e) => setV({ ...v, [f.key]: e.target.value })} />}
             </div>
           ))}
-          {err && <div style={{ color: "var(--reject)", fontSize: 12.5 }}>{err}</div>}
+          {err && <div style={{ color: "var(--red)", fontSize: 12.5 }}>{err}</div>}
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 4 }}>
             <button className="btn" onClick={onClose}>취소</button>
             <button className="btn prim" onClick={go} disabled={busy}>{busy ? "처리 중…" : submitLabel}</button>
