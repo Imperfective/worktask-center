@@ -29,6 +29,7 @@ COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
 COPY --from=build /app/seed/app.db /app/seed/app.db
+COPY prisma/upgrade-auth.mjs ./upgrade-auth.mjs
 COPY docker-entrypoint.sh ./
 RUN chmod +x docker-entrypoint.sh && mkdir -p /app/data
 EXPOSE 3300

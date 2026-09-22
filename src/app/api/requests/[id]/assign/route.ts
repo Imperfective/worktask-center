@@ -6,7 +6,8 @@ import { Status, EVENT } from "@/lib/domain";
 import { bad, reqId, readJson } from "@/lib/validate";
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const user = await currentUser(req);
+  const user = await currentUser();
+  if (!user) return bad("로그인이 필요합니다", 401);
   const { id } = await ctx.params;
   const rid = reqId(id);
   if (!rid) return bad("요청을 찾을 수 없습니다", 404);
@@ -18,7 +19,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   if (!body) return bad("요청 본문이 올바른 JSON이 아닙니다");
   const target = typeof body.toUserId === "string" && body.toUserId ? body.toUserId : user.id;
   // 대상이 해당 부서 담당자인지 검증 (설계서 §9)
-  if (!membersOf(r.department).includes(target)) return bad("부서 담당자가 아닙니다");
+  const members = await membersOf(r.department);
+  if (!members.some((m) => m.id === target)) return bad("부서 담당자가 아닙니다");
 
   // 배정도 전이 규칙을 따른다. 완료·종료·반려된 요청의 담당자를
   // 바꿀 수 있으면 종료 이후에도 이력이 계속 바뀌어 기록을 신뢰할 수 없다.

@@ -37,17 +37,25 @@ export const catByKey = (k: string) => CATEGORIES.find((c) => c.key === k);
 export const deptOfCategory = (k: string) => catByKey(k)?.dept ?? "IT팀";
 
 // 시드 사용자 (설계서 §3) — 요청자 2 + 담당자 3. 모두 가상 인물.
+// 데모 계정. 모두 가상 인물이고 비밀번호는 공개된 데모용이다.
 export const SEED_USERS = [
-  { id: "u_sales",  name: "김영업",   department: "영업팀",   isHandler: false },
-  { id: "u_design", name: "이하나",   department: "디자인팀", isHandler: false },
-  { id: "u_fac",    name: "박시설",   department: "시설팀",   isHandler: true },
-  { id: "u_it",     name: "최아이티", department: "IT팀",     isHandler: true },
-  { id: "u_ga",     name: "정총무",   department: "총무팀",   isHandler: true },
+  { id: "u_fac",    email: "fac@example.com",    name: "박시설",   department: "시설팀",   isHandler: true },
+  { id: "u_it",     email: "it@example.com",     name: "최아이티", department: "IT팀",     isHandler: true },
+  { id: "u_ga",     email: "ga@example.com",     name: "정총무",   department: "총무팀",   isHandler: true },
+  { id: "u_sales",  email: "sales@example.com",  name: "김영업",   department: "영업팀",   isHandler: false },
+  { id: "u_design", email: "design@example.com", name: "이하나",   department: "디자인팀", isHandler: false },
 ] as const;
 
-export const deptToHandlers: Record<string, string[]> = {
-  시설팀: ["u_fac"], IT팀: ["u_it"], 총무팀: ["u_ga"],
-};
+// 데모 계정 공용 비밀번호. 실제 비밀번호는 저장되지 않고 scrypt 해시만 들어간다.
+export const SEED_PASSWORD = "worktask1234";
+
+// 담당 부서 — 요청을 처리하는 세 부서. 이 부서에 가입하면 담당자가 된다.
+export const HANDLER_DEPTS = ["시설팀", "IT팀", "총무팀"] as const;
+
+// 가입 시 고를 수 있는 부서. 담당 부서가 앞에 온다.
+export const DEPARTMENTS = [
+  "시설팀", "IT팀", "총무팀", "영업팀", "디자인팀", "기획팀", "인사팀", "재무팀",
+] as const;
 
 export const EVENT = {
   CREATED: "CREATED", ASSIGNED: "ASSIGNED", STATUS_CHANGED: "STATUS_CHANGED",

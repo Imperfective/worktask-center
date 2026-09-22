@@ -7,7 +7,7 @@ import { LIMITS, bad, text, readJson } from "@/lib/validate";
 // GET /api/requests?view=mine|queue&tab=...
 export async function GET(req: NextRequest) {
   const user = await currentUser(req);
-  if (!user) return bad("알 수 없는 사용자입니다");
+  if (!user) return bad("로그인이 필요합니다", 401);
   const view = req.nextUrl.searchParams.get("view") ?? "mine";
   const tab = req.nextUrl.searchParams.get("tab") ?? "";
 
@@ -49,7 +49,7 @@ export async function GET(req: NextRequest) {
 // POST /api/requests — 등록
 export async function POST(req: NextRequest) {
   const user = await currentUser(req);
-  if (!user) return bad("알 수 없는 사용자입니다");
+  if (!user) return bad("로그인이 필요합니다", 401);
   const b = await readJson(req);
   if (!b) return bad("요청 본문이 올바른 JSON이 아닙니다");
 

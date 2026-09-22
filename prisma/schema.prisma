@@ -10,13 +10,29 @@ datasource db {
 
 model User {
   id          String  @id
+  email       String?  @unique              // 로그인 아이디. 기존 시드 계정도 채워 둔다
+  passwordHash String?                      // scrypt(N=16384) — 평문은 저장하지 않는다
   name        String
   department  String                       // IT·총무·시설·영업·디자인
-  isHandler   Boolean @default(false)
+  isHandler   Boolean @default(false)      // 부서로 결정된다(시설·IT·총무팀이면 담당자)
+  createdAt   DateTime @default(now())
   requested   Request[] @relation("requester")
   assigned    Request[] @relation("assignee")
   events      RequestEvent[]
   follows     RequestFollower[]
+  sessions    Session[]
+}
+
+// 로그인 세션. 토큰 자체가 비밀이라 서명 키가 따로 필요 없고,
+// 행을 지우면 즉시 무효가 되어 로그아웃이 실제로 동작한다.
+model Session {
+  token     String   @id                   // 랜덤 32바이트 hex
+  userId    String
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model Request {

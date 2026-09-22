@@ -1,22 +1,19 @@
 "use client";
 import { STATUS, PRIORITY, catByKey } from "./domain";
 
-const KEY = "worktask-user";
-export function getUserId(): string {
-  if (typeof window === "undefined") return "u_sales";
-  return localStorage.getItem(KEY) || "u_sales";
-}
-export function setUserId(id: string) {
-  localStorage.setItem(KEY, id);
-  window.dispatchEvent(new Event("user-changed"));
-}
+// 신원은 HttpOnly 세션 쿠키가 실어 나른다. 스크립트가 만질 수 있는 값으로
+// 사용자를 정하면 그 값을 바꾸는 것만으로 남의 계정이 된다.
 export async function api(path: string, opts: RequestInit = {}) {
   const res = await fetch(path, {
     ...opts,
-    headers: { "content-type": "application/json", "x-user-id": getUserId(), ...(opts.headers || {}) },
+    headers: { "content-type": "application/json", ...(opts.headers || {}) },
     cache: "no-store",
   });
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && typeof window !== "undefined" && !location.pathname.startsWith("/login")) {
+    location.href = "/login?next=" + encodeURIComponent(location.pathname);
+    throw new Error("로그인이 필요합니다");
+  }
   if (!res.ok) throw new Error(data.error || "요청 실패");
   return data;
 }

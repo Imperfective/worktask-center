@@ -7,7 +7,8 @@ import { bad, readJson } from "@/lib/validate";
 
 // POST /api/ai/analyze { text, mode: "ai"|"manual" }
 export async function POST(req: NextRequest) {
-  const user = await currentUser(req);
+  const user = await currentUser();
+  if (!user) return bad("로그인이 필요합니다", 401);
   const body = await readJson(req);
   if (!body) return bad("요청 본문이 올바른 JSON이 아닙니다");
   const { mode } = body;

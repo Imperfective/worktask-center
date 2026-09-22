@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { api, code, fmtDate, getUserId } from "@/lib/ui";
+import { api, code, fmtDate } from "@/lib/ui";
 import { StatusBadge, PriorityText } from "@/components/Badges";
 
 const TABS = [
@@ -20,7 +20,6 @@ export default function MyPage() {
   const router = useRouter();
 
   async function load() {
-    setUid(getUserId());
     try {
       const [d, all] = await Promise.all([
         api(`/api/requests?view=mine&tab=${tab}`),
@@ -28,16 +27,11 @@ export default function MyPage() {
       ]);
       setItems(d.items);
       setCounts(Object.fromEntries(TABS.map((t, i) => [t.key, all[i].items.length])));
-      const u = await api("/api/users");
-      setMe(u.users.find((x: any) => x.id === getUserId()));
+      const u = await api("/api/auth/me");
+      setMe(u.user); setUid(u.user.id);
     } catch {}
   }
   useEffect(() => { load(); }, [tab]);
-  useEffect(() => {
-    const h = () => load();
-    window.addEventListener("user-changed", h);
-    return () => window.removeEventListener("user-changed", h);
-  }, [tab]);
 
   return (
     <div>

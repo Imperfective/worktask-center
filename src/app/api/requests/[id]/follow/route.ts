@@ -6,7 +6,8 @@ import { Status, EVENT } from "@/lib/domain";
 import { bad, reqId, readJson } from "@/lib/validate";
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const user = await currentUser(req);
+  const user = await currentUser();
+  if (!user) return bad("로그인이 필요합니다", 401);
   const { id } = await ctx.params;
   const rid = reqId(id);
   if (!rid) return bad("요청을 찾을 수 없습니다", 404);

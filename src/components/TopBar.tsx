@@ -2,37 +2,36 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { api, getUserId, setUserId, initial } from "@/lib/ui";
+import { api, initial } from "@/lib/ui";
 
 interface U { id: string; name: string; department: string; isHandler: boolean }
 
 export default function TopBar() {
-  const [users, setUsers] = useState<U[]>([]);
-  const [uid, setUid] = useState("u_sales");
+  const [me, setMe] = useState<U | null>(null);
   const [qCount, setQCount] = useState(0);
   const [open, setOpen] = useState(false);
   const path = usePathname();
   const box = useRef<HTMLDivElement>(null);
-
-  const me = users.find((u) => u.id === uid);
   const isHandler = !!me?.isHandler;
 
-  async function refresh() {
-    setUid(getUserId());
-    try { setUsers((await api("/api/users")).users); } catch {}
-  }
   useEffect(() => {
-    refresh();
-    const h = () => refresh();
-    window.addEventListener("user-changed", h);
+    api("/api/auth/me").then((d) => setMe(d.user)).catch(() => setMe(null));
     const c = (e: MouseEvent) => { if (box.current && !box.current.contains(e.target as Node)) setOpen(false); };
     document.addEventListener("click", c);
-    return () => { window.removeEventListener("user-changed", h); document.removeEventListener("click", c); };
-  }, []);
+    return () => document.removeEventListener("click", c);
+  }, [path]);
   useEffect(() => {
     if (!isHandler) { setQCount(0); return; }
     api("/api/requests?view=queue&tab=unassigned").then((d) => setQCount(d.items?.length ?? 0)).catch(() => setQCount(0));
-  }, [uid, isHandler, path]);
+  }, [isHandler, path]);
+
+  async function logout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    window.location.href = "/login";
+  }
+
+  // 로그인 화면에는 상단바를 띄우지 않는다
+  if (path?.startsWith("/login")) return null;
 
   const d = new Date();
   const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} (${"일월화수목금토"[d.getDay()]})`;
@@ -81,17 +80,17 @@ export default function TopBar() {
             </button>
             {open && (
               <div className="userpop" onClick={(e) => e.stopPropagation()}>
-                <div className="hd">PoC — 로그인 대신 역할을 바꿉니다</div>
-                {users.map((u) => (
-                  <button key={u.id} onClick={() => { setUserId(u.id); setOpen(false); }}>
-                    <span className={`avatar${u.id === uid ? " red" : ""}`}>{initial(u.name)}</span>
-                    <span>
-                      <span className="nm" style={{ display: "block" }}>{u.name}</span>
-                      <span className="sub">{u.department} · {u.isHandler ? "담당자" : "요청자"}</span>
-                    </span>
-                    {u.id === uid && <span className="ck">✓</span>}
-                  </button>
-                ))}
+                <div className="hd">로그인 계정</div>
+                <div style={{ display: "flex", gap: 9, alignItems: "center", padding: "6px 10px 10px" }}>
+                  <span className="avatar red">{initial(me?.name ?? "")}</span>
+                  <span>
+                    <span className="nm" style={{ display: "block" }}>{me?.name}</span>
+                    <span className="sub">{me?.department} · {me?.isHandler ? "처리 담당" : "요청자"}</span>
+                  </span>
+                </div>
+                <button onClick={logout} style={{ borderTop: "1px solid var(--line-2)", color: "var(--red)" }}>
+                  로그아웃
+                </button>
               </div>
             )}
           </div>

@@ -1,9 +1,9 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, code, fmtDate, categoryLabel, getUserId } from "@/lib/ui";
+import { api, code, fmtDate, categoryLabel } from "@/lib/ui";
 import { StatusBadge, PriorityText } from "@/components/Badges";
-import { deptToHandlers, SEED_USERS } from "@/lib/domain";
+
 
 const TABS = [
   { key: "unassigned", label: "미배정 요청" },
@@ -19,31 +19,28 @@ export default function QueuePage() {
   const [stats, setStats] = useState<any>(null);
   const [me, setMe] = useState<any>(null);
   const [err, setErr] = useState("");
+  const [members, setMembers] = useState<{ id: string; name: string; department: string }[]>([]);
   const router = useRouter();
 
   async function load() {
     try {
       const [d, s, u, all] = await Promise.all([
-        api(`/api/requests?view=queue&tab=${tab}`), api("/api/stats"), api("/api/users"),
+        api(`/api/requests?view=queue&tab=${tab}`), api("/api/stats"), api("/api/auth/me"),
         Promise.all(TABS.map((t) => api(`/api/requests?view=queue&tab=${t.key}`))),
       ]);
       setItems(d.items); setStats(s);
-      setMe(u.users.find((x: any) => x.id === getUserId()));
+      setMe(u.user);
       setCounts(Object.fromEntries(TABS.map((t, i) => [t.key, all[i].items.length])));
+      setMembers((await api("/api/members")).members);
     } catch {}
   }
   useEffect(() => { load(); }, [tab]);
-  useEffect(() => {
-    const h = () => load();
-    window.addEventListener("user-changed", h);
-    return () => window.removeEventListener("user-changed", h);
-  }, [tab]);
 
   async function assign(id: number, toUserId?: string) {
     try { await api(`/api/requests/${id}/assign`, { method: "POST", body: JSON.stringify({ toUserId }) }); setErr(""); load(); }
     catch (e: any) { setErr(e.message); load(); }   // 목록이 오래돼 이미 배정된 경우
   }
-  const members = (deptToHandlers[me?.department] ?? []).map((id: string) => SEED_USERS.find((s) => s.id === id)!);
+
 
   const Stat = ({ l, v, red }: { l: string; v: any; red?: boolean }) => (
     <div className="card stat">
@@ -125,7 +122,7 @@ export default function QueuePage() {
                           <select className="select hide-sm" style={{ width: "auto", padding: "5px 8px", fontSize: 12.5 }}
                             defaultValue="" onChange={(e) => e.target.value && assign(r.id, e.target.value)}>
                             <option value="">부서원 배정</option>
-                            {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                            {members.map((m: any) => <option key={m.id} value={m.id}>{m.name}</option>)}
                           </select>
                         </div>
                       ) : <button className="btn sm" onClick={() => router.push(`/r/${r.id}`)}>열기</button>}

@@ -1,17 +1,20 @@
 import { PrismaClient } from "@prisma/client";
-import { SEED_USERS, deptToHandlers } from "../src/lib/domain";
+import { SEED_USERS, SEED_PASSWORD } from "../src/lib/domain";
+import { hashPassword } from "../src/lib/password";
 const db = new PrismaClient();
 
 // 상대 시각 헬퍼
 const hrsAgo = (h: number) => new Date(Date.now() - h * 3600_000);
 
 async function main() {
+  await db.session.deleteMany();
   await db.requestFollower.deleteMany();
   await db.requestEvent.deleteMany();
   await db.request.deleteMany();
   await db.user.deleteMany();
 
-  for (const u of SEED_USERS) await db.user.create({ data: u });
+  const pw = await hashPassword(SEED_PASSWORD);
+  for (const u of SEED_USERS) await db.user.create({ data: { ...u, passwordHash: pw } });
 
   // 요청 + 생성 이벤트를 함께 만드는 헬퍼
   async function mk(r: {

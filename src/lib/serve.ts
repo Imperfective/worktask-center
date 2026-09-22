@@ -1,11 +1,12 @@
 import { prisma } from "./db";
 import { allowedActions, canComment, canFollow, Role } from "./transitions";
-import { Status, deptToHandlers, EVENT } from "./domain";
-import { NextRequest } from "next/server";
+import { Status, EVENT } from "./domain";
+import { userFromSession } from "./auth";
 
-export async function currentUser(req: NextRequest) {
-  const id = req.headers.get("x-user-id") || "u_sales";
-  return prisma.user.findUnique({ where: { id } });
+// 사용자는 오직 세션 쿠키로만 정해진다.
+// 클라이언트가 보낸 값으로 신원을 정하면 헤더 한 줄로 남의 계정이 된다.
+export async function currentUser(_req?: unknown) {
+  return userFromSession();
 }
 
 // 이 사용자가 이 요청에 대해 담당자 역할인가 (설계서 §3: 소속 부서 담당자)
@@ -78,5 +79,14 @@ export function serializeReq(r: any) {
   };
 }
 
-export function membersOf(dept: string) { return deptToHandlers[dept] ?? []; }
+// 그 부서의 담당자 목록을 DB에서 구한다. 가입으로 담당자가 늘어나므로
+// 코드에 박힌 표를 쓰면 새로 가입한 담당자에게 배정할 수 없다.
+export async function membersOf(dept: string) {
+  const rows = await prisma.user.findMany({
+    where: { department: dept, isHandler: true },
+    select: { id: true, name: true, department: true },
+    orderBy: { name: "asc" },
+  });
+  return rows;
+}
 export { EVENT };

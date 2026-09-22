@@ -4,10 +4,11 @@
 요청 누락·중복·진행 상황 확인·처리 기록 부재 네 문제를 구조로 푸는 PoC.
 
 > **동작 중인 서비스 → https://minkyu.app**
-> 로그인 없이 상단 오른쪽 **사용자 전환**으로 요청자·담당자 관점을 바로 오갈 수 있습니다.
+> 데모 계정으로 바로 로그인해 요청자·담당자 관점을 모두 볼 수 있습니다 (아래 [데모 계정](#데모-계정)).
 
 | | |
 |---|---|
+| [로그인과 계정](#로그인과-계정) | 데모 계정·가입 |
 | [문제를 어떻게 봤나](#문제를-어떻게-봤나) · [설계 요점](#설계-요점) | 왜 이렇게 만들었나 |
 | [시스템 아키텍처](#시스템-아키텍처) · [API 명세](#api-명세) | 어떻게 돌아가나 |
 | [품질 검증 (QA)](#품질-검증-qa) | 무엇을 어떻게 확인했나 |
@@ -136,12 +137,11 @@ AI는 **Ollama 로컬 경량 모델**(`qwen2.5:1.5b`)로 돌아 외부 API 키�
     │  HTTPS
     ▼
 ┌─────────────────────────────────────────────────────────┐
-│ deepvoice-caddy (Docker)        :80 / :443              │
+│ Caddy (Docker)                  :80 / :443              │
 │  · TLS 자동 발급·갱신                                    │
 │  · minkyu.app → reverse_proxy worktask-app:3300         │
-│  · 같은 서버의 ai-hci.org · hermes-company.com 과 공존   │
 └───────────────┬─────────────────────────────────────────┘
-                │ deepvoice-net (도커 네트워크)
+                │ 도커 네트워크
                 ▼
 ┌─────────────────────────────────────────────────────────┐
 │ worktask-app   Next.js 15 standalone   :3300            │
@@ -158,10 +158,10 @@ AI는 **Ollama 로컬 경량 모델**(`qwen2.5:1.5b`)로 돌아 외부 API 키�
 └───────────────────┘     └─────────────────────────────┘
 ```
 
-- **앱 컨테이너는 포트를 열지 않는다.** 기존 Caddy가 도커 네트워크로 직접 붙는다.
-  호스트 포트를 새로 여는 순간 같은 서버의 다른 서비스와 충돌할 수 있기 때문이다.
+- **앱 컨테이너는 호스트 포트를 열지 않는다.** Caddy가 도커 네트워크로 직접 붙는다.
+  포트를 새로 여는 만큼 노출면이 늘고 충돌 여지도 생기기 때문이다.
 - **Ollama는 외부에 노출되지 않는다.** `worktask` 내부 네트워크에만 속해 앱만 호출한다.
-- 메모리 상한 3GB를 걸어 같은 서버의 기존 서비스를 압박하지 않게 했다.
+- Ollama에 메모리 상한 3GB를 걸어 호스트 자원을 독점하지 않게 했다.
 
 ### 요청 한 건이 흐르는 경로
 
@@ -194,7 +194,7 @@ users ──┬─< requests >──┬─< request_events     (추가 전용 �
 
 | 테이블 | 역할 |
 |---|---|
-| `users` | 시드 5명 (요청자 2 · 담당자 3). PoC라 로그인 없이 헤더로 식별 |
+| `users` | 가입한 계정. 데모 계정 5명이 시드된다 |
 | `requests` | **현재 상태**만 들고 있다 |
 | `request_events` | **모든 변경 이력.** 수정·삭제 API가 없는 추가 전용 |
 | `request_followers` | 참여자. 복합 PK라 같은 사람이 두 번 들어갈 수 없다 |
@@ -227,27 +227,207 @@ DB는 도커 볼륨 `worktask-center_worktask-data` 의 `/app/data/app.db` 에 �
 상태 변경뿐 아니라 **행위자와 입력한 문장까지** 이벤트에 남아 재시작 후에도 복원된다.
 (위 검증용 요청 #11은 확인 후 삭제했다. 현재 운영 DB는 시드 10건 상태)
 
+### DB 스키마
+
+SQLite. Prisma가 스키마 하나에서 클라이언트 타입과 테이블을 함께 만든다.
+Postgres로 옮기려면 `datasource` 의 `provider` 와 `url` 만 바꾸면 된다.
+
+#### 테이블 관계 (ERD)
+
+```
+                    ┌──────────────────────────┐
+                    │ User                     │
+                    │  id            PK  TEXT  │
+                    │  email         UQ  TEXT? │──── 로그인 아이디
+                    │  passwordHash      TEXT? │──── scrypt 해시 (평문 없음)
+                    │  name              TEXT  │
+                    │  department        TEXT  │
+                    │  isHandler         BOOL  │──── 부서에서 결정
+                    │  createdAt         DATE  │
+                    └───┬───┬───┬───┬──────┬───┘
+      requesterId (1:N) │   │   │   │      │ (1:N) userId
+      ┌─────────────────┘   │   │   │      └──────────────┐
+      │   assigneeId (1:N)  │   │   │ actorId (1:N)       │
+      │   ┌─────────────────┘   │   └──────────┐          │
+      │   │                     │              │          │
+      ▼   ▼                     │              ▼          ▼
+┌──────────────────────┐        │   ┌──────────────────┐ ┌────────────────┐
+│ Request              │        │   │ RequestEvent     │ │ Session        │
+│  id           PK INT │        │   │  id        PK INT│ │  token   PK TXT│
+│  title           TEXT│        │   │  requestId FK ───┼─┤  userId  FK    │
+│  description     TEXT│        │   │  actorId   FK    │ │  createdAt DATE│
+│  summary         TEXT│        │   │  type      TEXT  │ │  expiresAt DATE│
+│  category        TEXT│        │   │  payload   TEXT  │ └────────────────┘
+│  department      TEXT│        │   │  createdAt DATE  │   onDelete: Cascade
+│  priority        TEXT│        │   └──────────────────┘
+│  status          TEXT│        │            ▲
+│  requesterId  FK TEXT│        │            │ requestId (1:N)
+│  assigneeId   FK TEXT│◄───────┘            │
+│  duplicateOfId FK INT│──┐                  │
+│  holdReason      TEXT│  │ 자기 참조         │
+│  holdResumeDate  TEXT│  │ (중복 반려 시 원본)│
+│  result          TEXT│  │                  │
+│  rejectReason    TEXT│  │                  │
+│  aiSuggestion    TEXT│  │                  │
+│  createdAt       DATE│  │                  │
+│  updatedAt       DATE│◄─┘                  │
+│  resolvedAt      DATE│─────────────────────┘
+└──────────┬───────────┘
+           │ requestId (1:N)
+           ▼
+┌──────────────────────────────┐
+│ RequestFollower              │
+│  requestId  FK ┐             │
+│  userId     FK ┘ 복합 PK     │──── 같은 사람이 두 번 들어갈 수 없다
+│  via            TEXT         │     register · detail · duplicate
+│  createdAt      DATE         │
+└──────────────────────────────┘
+```
+
+#### 외래키 정리
+
+| 관계 | 컬럼 | 대상 | 의미 | 삭제 동작 |
+|---|---|---|---|---|
+| Request → User | `requesterId` | `User.id` | 요청을 낸 사람 | 제한 (요청이 있으면 사용자를 못 지움) |
+| Request → User | `assigneeId` | `User.id` | 담당자. **nullable** — 미배정 상태가 있다 | 제한 |
+| Request → Request | `duplicateOfId` | `Request.id` | 중복 반려 시 원본. **자기 참조** | 제한 |
+| RequestEvent → Request | `requestId` | `Request.id` | 어느 요청의 이력인가 | 제한 |
+| RequestEvent → User | `actorId` | `User.id` | 누가 한 일인가 | 제한 |
+| RequestFollower → Request | `requestId` | `Request.id` | 참여 대상 | 제한 |
+| RequestFollower → User | `userId` | `User.id` | 참여자 | 제한 |
+| Session → User | `userId` | `User.id` | 세션 주인 | **Cascade** — 사용자를 지우면 세션도 사라진다 |
+
+세션만 Cascade다. 나머지는 기본 동작(제한)이라 **사용자를 지우려 해도 그 사람의 요청과
+이력이 남아 있으면 막힌다.** 기록이 사람 삭제로 끊기면 안 되기 때문이다.
+퇴사자 처리가 필요하면 행을 지우는 대신 비활성 플래그를 두는 쪽이 맞다.
+
+#### 제약과 인덱스
+
+| 종류 | 대상 | 이유 |
+|---|---|---|
+| UNIQUE | `User.email` | 같은 이메일로 두 번 가입 못 하게 |
+| 복합 PK | `RequestFollower(requestId, userId)` | 중복 참여를 **DB가** 막는다. 앱 코드가 빠뜨려도 안전 |
+| PK | `Session.token` | 토큰 자체가 키라 조회가 한 번에 끝난다 |
+| INDEX | `Session.userId` | 사용자별 세션 정리용 |
+
+`RequestFollower` 의 복합 PK 가 좋은 예다. "이미 참여 중인지" 를 앱에서 확인하지만,
+확인을 빠뜨려도 DB 가 거절한다. 규칙을 두 겹으로 두는 편이 낫다.
+
+#### 왜 현재 상태와 이력을 나눴나
+
+`Request` 는 **지금 상태**만, `RequestEvent` 는 **거쳐온 과정**을 맡는다.
+
+- 목록·상세는 `Request` 한 행만 읽으면 된다. 이력을 접어 계산할 필요가 없다.
+- `RequestEvent` 에는 **수정·삭제 API 가 없다.** 추가만 한다.
+- `payload` 는 JSON 문자열이다. 이벤트 종류마다 담을 내용이 달라
+  (`{"from","to"}` · `{"reason","resume_date"}` · `{"result"}` · `{"suggestion","accepted"}`)
+  컬럼으로 못 박으면 종류가 늘 때마다 스키마가 바뀐다.
+
+이 구조 덕에 **AI 제안 수용률** 같은 지표를 나중에 코드 변경 없이 계산할 수 있다.
+`AI_SUGGESTED` 이벤트에 제안값과 최종 채택 여부가 함께 들어 있기 때문이다.
+
+#### 마이그레이션
+
+개발은 `prisma db push` 로 스키마를 맞춘다. 운영 DB 는 이미 데이터가 있어
+**추가만 하는 DDL** 로 올린다 (`prisma/upgrade-auth.mjs`).
+
+```
+ALTER TABLE User ADD COLUMN email TEXT
+ALTER TABLE User ADD COLUMN passwordHash TEXT
+ALTER TABLE User ADD COLUMN createdAt DATETIME
+CREATE UNIQUE INDEX User_email_key ON User(email)
+CREATE TABLE Session (...)
+→ 기존 5개 계정에 이메일·비밀번호 해시를 채운다
+```
+
+기존 행을 지우지 않는다. 요청·이력이 `User.id` 를 참조하고 있어
+사용자를 다시 만들면 그 참조가 전부 끊기기 때문이다.
+
+---
+
+## 로그인과 계정
+
+### 인증 방식
+
+| | |
+|---|---|
+| 비밀번호 | `scrypt` (Node 내장, salt 16바이트 · 키 64바이트). **평문은 저장하지 않는다** |
+| 세션 | 랜덤 32바이트 토큰을 `Session` 테이블에 저장 |
+| 쿠키 | `wt_session` · **HttpOnly** · `SameSite=Lax` · 운영에서 `Secure` · 14일 |
+| 비교 | `timingSafeEqual` — 바이트가 몇 개까지 맞는지 시간으로 새지 않게 |
+
+**세션을 DB 행으로 둔 이유**는 로그아웃 때문이다. 토큰에 정보를 담아 서명만 하는
+방식이면 로그아웃은 "브라우저에서 쿠키를 지운다"에 그친다. 이미 복사된 토큰은
+만료까지 살아 있다. 행을 지우면 **서버가 즉시 거절**한다 (QA H9).
+
+**쿠키는 HttpOnly 라 스크립트가 읽지 못한다.** 이전에는 `x-user-id` 헤더로 사용자를
+정했는데, 그건 헤더 한 줄을 바꾸는 것만으로 남의 계정이 된다는 뜻이었다.
+
+### 담당자 여부는 부서가 정한다
+
+가입 폼에 "담당자로 가입" 체크박스를 두지 않았다. 체크하면 누구나 담당자가 되어
+남의 부서 요청 큐를 볼 수 있기 때문이다. 서버가 **부서만 보고** 결정한다.
+
+```
+시설팀 · IT팀 · 총무팀  →  처리 담당 (해당 부서 큐를 본다)
+그 밖의 부서            →  요청자
+```
+
+본문에 `isHandler: true` 를 실어 보내도 무시된다 (QA H6).
+
+### 데모 계정
+
+**모두 가상 인물이고, 공개된 데모 비밀번호다.** 실제 자격 증명이 아니다.
+
+비밀번호는 모두 `worktask1234`
+
+#### 시설팀 (시설 관리) 및 처리 담당 부서
+
+| 이메일 | 이름 | 부서 | 역할 |
+|---|---|---|---|
+| `fac@example.com` | 박시설 | **시설팀** | 처리 담당 — 시설 보수·설비 요청을 받는다 |
+| `it@example.com` | 최아이티 | IT팀 | 처리 담당 — 장애·장비·계정 요청을 받는다 |
+| `ga@example.com` | 정총무 | 총무팀 | 처리 담당 — 비품 요청을 받는다 |
+
+#### 이외 팀 (요청자)
+
+| 이메일 | 이름 | 부서 | 역할 |
+|---|---|---|---|
+| `sales@example.com` | 김영업 | 영업팀 | 요청자 — 요청 등록·진행 확인·종료 |
+| `design@example.com` | 이하나 | 디자인팀 | 요청자 |
+
+로그인 화면의 계정 칩을 누르면 바로 채워진다.
+회원가입으로 새 계정을 만들어도 되고, 담당 부서를 고르면 그 부서 큐가 보인다.
+
+---
+
 ---
 
 ## API 명세
 
 모든 엔드포인트는 `application/json` 을 주고받는다. **외부 API 키가 없다.**
 
-### 인증 — PoC 한정
+### 인증
 
-로그인 대신 **`x-user-id` 헤더**로 사용자를 식별한다. 브라우저는 `localStorage` 에
-선택한 사용자를 저장하고 모든 호출에 실어 보낸다 (`src/lib/ui.ts`의 `api()`).
+**세션 쿠키**로만 사용자가 정해진다. 클라이언트가 보내는 값으로 신원을 정하지 않는다.
 
 ```
-x-user-id: u_sales | u_design | u_fac | u_it | u_ga     (없으면 u_sales)
+POST /api/auth/signup   { email, password(8자+), name, department }  → 가입 + 자동 로그인
+POST /api/auth/login    { email, password }                          → 세션 발급
+POST /api/auth/logout                                                → 서버에서 세션 삭제
+GET  /api/auth/me                                                    → 현재 로그인 계정
 ```
 
-권한은 헤더가 아니라 **서버가 DB에서 다시 판정한다.** 요청의 담당 부서와 사용자의
-부서·담당자 여부를 대조해 역할(`handler` / `requester`)을 정한다(`serve.ts`의 `rolesFor`).
-헤더를 바꿔도 남의 부서 요청을 배정할 수 없다(QA C1·C2).
+- 성공하면 `Set-Cookie: wt_session=… ; HttpOnly; SameSite=Lax; Secure(운영)` 이 내려온다.
+- 로그인 실패는 **없는 계정과 틀린 비밀번호를 구분하지 않는다.** 구분해 알려주면
+  응답만으로 계정 존재 여부를 알아낼 수 있다 (QA H4).
+- 권한은 매 요청마다 서버가 DB 에서 다시 판정한다. 요청의 담당 부서와 사용자의
+  부서·담당자 여부를 대조해 역할(`handler` / `requester`)을 정한다(`serve.ts` 의 `rolesFor`).
+- 세션 없이 호출한 모든 API 는 **401** (QA H1·H2). 화면은 미들웨어가 `/login` 으로 보낸다.
 
-> 실서비스로 가면 이 헤더를 세션·SSO로 바꾸면 된다. 역할 판정과 전이 검증은
-> 이미 서버에 있으므로 인증 계층만 갈아끼우면 된다.
+#### `GET /api/members?dept=`
+배정 드롭다운용. 그 부서의 담당자 목록을 **DB 에서** 구한다 — 가입으로 담당자가 늘면
+코드 수정 없이 배정 대상에 들어온다. → `{ members: [{ id, name, department }] }`
 
 ### 공통 응답
 
@@ -264,7 +444,8 @@ x-user-id: u_sales | u_design | u_fac | u_it | u_ga     (없으면 u_sales)
 ### 엔드포인트
 
 #### `GET /api/users`
-사용자 전환 드롭다운용. → `{ users: [{ id, name, department, isHandler }] }`
+요청자·담당자 이름 표시용. **비밀번호 해시와 이메일은 내보내지 않는다** (QA H11).
+→ `{ users: [{ id, name, department, isHandler }] }`
 
 #### `GET /api/requests?view=&tab=`
 | 파라미터 | 값 | 의미 |
@@ -373,18 +554,19 @@ x-user-id: u_sales | u_design | u_fac | u_it | u_ga     (없으면 u_sales)
 ## 품질 검증 (QA)
 
 예외 케이스를 사람이 매번 클릭해 확인하면 빠뜨린다. API를 직접 두드리는
-**52→57건 시나리오 스위트**를 만들어 규칙이 서버에서 실제로 강제되는지 확인한다.
+**68건 시나리오 스위트**를 만들어 규칙이 서버에서 실제로 강제되는지 확인한다.
 
 ```bash
 npm run qa            # 전용 DB(prisma/qa.db) + 3310 포트로 격리 실행
-npm run qa -- D       # 접두사로 특정 그룹만 (A 기본 / B 등록검증 / C 권한 / D 전이 / E 중복참여 / F AI / G 목록)
+npm run qa -- H       # 접두사로 특정 그룹만 (A 기본 / B 등록검증 / C 권한 / D 전이 / E 중복참여 / F AI / G 목록)
 ```
 
 개발용 `dev.db`는 건드리지 않는다. 끝나면 서버와 DB를 정리한다.
 
 | 그룹 | 건수 | 무엇을 보나 |
 |---|---|---|
-| A 기본 | 4 | 시드·목록·통계·알 수 없는 사용자 |
+| A 기본 | 4 | 시드·목록·통계·비로그인 차단 |
+| **H 인증** | **11** | **비로그인 차단·로그인 실패·세션 쿠키·권한 상승·로그아웃·정보 유출** |
 | B 등록검증 | 9 | 공백 제목, 미지정 카테고리·긴급도, 길이 초과, 깨진 JSON |
 | C 권한 | 5 | 타 부서 담당자, 요청자의 배정 시도, 부서 외 대상 |
 | D 전이 | 17 | 전이 맵 위반, 필수 입력 누락, 종료 이후 변경, API 우회 |
@@ -393,7 +575,7 @@ npm run qa -- D       # 접두사로 특정 그룹만 (A 기본 / B 등록검증
 | G 목록 | 7 | 부서 격리, 긴급 정렬, 404, 타임라인 순서 |
 
 
-### 시나리오 57건 전체
+### 시나리오 68건 전체
 
 `t(id, 그룹, 이름)` 으로 등록된 케이스 그대로다. 정상 흐름은 최소한만 두고
 **예외 경로에 무게를 실었다.**
@@ -406,7 +588,25 @@ npm run qa -- D       # 접두사로 특정 그룹만 (A 기본 / B 등록검증
 | A1 | 사용자 5명이 시드된다 |
 | A2 | 내 요청 목록이 배열로 온다 |
 | A3 | 부서 통계가 숫자 3개로 온다 |
-| A4 | 알 수 없는 사용자 헤더는 거부된다 |
+| A4 | 로그인 없이 목록을 볼 수 없다 |
+</details>
+
+<details>
+<summary><b>H 인증 (11건)</b> — 로그인·세션·권한 상승</summary>
+
+| ID | 확인하는 것 |
+|---|---|
+| H1 | 모든 쓰기 API가 비로그인을 막는다 |
+| H2 | 모든 읽기 API가 비로그인을 막는다 |
+| H3 | 틀린 비밀번호는 401 |
+| H4 | 없는 계정과 틀린 비밀번호의 응답이 구분되지 않는다 |
+| H5 | 세션 쿠키는 HttpOnly 로 내려온다 |
+| H6 | 가입 시 담당자 여부는 부서가 정한다 |
+| H7 | 담당 부서로 가입하면 담당자가 되고 부서 큐가 보인다 |
+| H8 | 가입 입력 검증 |
+| H9 | 로그아웃하면 세션이 서버에서 무효가 된다 |
+| H10 | 위조한 세션 토큰은 통하지 않는다 |
+| H11 | 사용자 목록에 비밀번호 해시·이메일이 실리지 않는다 |
 </details>
 
 <details>
@@ -519,7 +719,7 @@ API 스위트는 서버 규칙만 본다. 화면 동작과 배포 상태는 따�
 | DB 영속 | 운영 API로 생애주기 1회전 + 컨테이너 재시작 | 상태·이벤트 5건 그대로 |
 | Ollama 경로 | 운영 API 호출해 `source` 확인 | `source: "ollama"` |
 | 규칙 기반 대체 경로 | 모델 없는 로컬에서 같은 입력 | `source: "rule"` 로 동일 화면 |
-| 기존 서비스 영향 | Caddy 등록 8개 호스트 응답 확인 | 전부 정상 (200/301/302) |
+| 배포 후 사이트 응답 | 재배포 직후 HTTPS 응답 확인 | 200 |
 
 ### 첫 실행에서 나온 결함 12건과 수정
 
@@ -582,7 +782,7 @@ API 스위트는 서버 규칙만 본다. 화면 동작과 배포 상태는 따�
 npm install
 npx prisma db push && npm run db:seed
 npm run dev                 # http://localhost:3300
-npm run qa                  # 예외 케이스 스위트 57건
+npm run qa                  # 예외 케이스 스위트 68건
 ```
 
 Docker로:
@@ -604,6 +804,9 @@ src/lib/transitions.ts   전이 맵 — 누가 어느 상태에서 무엇을 할
 src/lib/ai.ts            Ollama 호출 + 규칙 기반 fallback(키워드·bigram)
 src/lib/serve.ts         사용자 식별·역할 판정(복수 역할)·이벤트 기록·상세 DTO
 src/lib/validate.ts      입력 검증·id 파싱·JSON 파싱 — 라우트 공용
+src/lib/password.ts      scrypt 해시·검증 (Next 런타임 비의존 — 시드에서도 쓴다)
+src/lib/auth.ts          세션 발급·조회·파기, 세션 쿠키
+src/middleware.ts        세션 쿠키 없는 화면 접근을 /login 으로
 
 src/app/api/requests     GET 목록(내 요청/부서 큐) · POST 등록
 src/app/api/requests/[id]            GET 상세 DTO (허용 액션 포함)
@@ -613,14 +816,16 @@ src/app/api/requests/[id]/comments   POST 코멘트
 src/app/api/requests/[id]/follow     POST 같은 문제로 참여
 src/app/api/ai/analyze   POST 자연어 → 제안 + 유사 요청
 src/app/api/stats        GET 오늘 접수 · 평균 처리 시간 · 미배정 긴급
-src/app/api/users        GET 사용자 전환 목록
+src/app/api/users        GET 사용자 목록(이름 표시용)
+src/app/api/members      GET 부서 담당자 목록(배정 대상)
+src/app/api/auth/{signup,login,logout,me}  가입·로그인·로그아웃·현재 계정
 
 src/app/                 요청하기 / my(내 요청) / queue(처리할 요청) / r/[id](상세)
 prisma/schema.prisma     4테이블 (users · requests · request_events · request_followers)
 prisma/seed.ts           열린 요청 · 완료 · 종료 · 중복 쌍 · 반려 건
 docs/DECISIONS.md        판단 기록 — 무엇을 왜 그렇게 정했나 (번복 포함)
 docs/AI_LOG.md           AI 활용 기록 — AI 결과에서 고친 것
-qa/run.mjs               예외 케이스 시나리오 57건 (의존성 없음)
+qa/run.mjs               예외 케이스 시나리오 68건 (의존성 없음)
 qa/run.sh                전용 DB·포트로 격리 실행
 docs/시안_주석.html       기획 의도가 주석으로 달린 화면 시안 (설계 근거)
 ```
@@ -629,7 +834,7 @@ docs/시안_주석.html       기획 의도가 주석으로 달린 화면 시안
 
 | 항목 | 이유 | 대체 |
 |---|---|---|
-| 로그인·SSO | 문제 해결과 무관 | 상단 사용자 전환 |
+| SSO·소셜 로그인 | 이메일 로그인으로 흐름 검증에 충분 | 이메일+비밀번호 가입·로그인 |
 | 메일·메신저 알림 | 원인이 채널이 아니라고 판단 | 화면 내 상태 표시 |
 | 첨부파일 | 스토리지 필요, 핵심 흐름과 무관 | 텍스트 설명 |
 | SLA·에스컬레이션 | 합의된 기준 없이 임의 시간은 의미 없음 | 긴급도 필드만 |

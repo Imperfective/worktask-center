@@ -4,7 +4,7 @@ import { currentUser } from "@/lib/serve";
 import { bad } from "@/lib/validate";
 export async function GET(req: NextRequest) {
   const user = await currentUser(req);
-  if (!user) return bad("알 수 없는 사용자입니다");
+  if (!user) return bad("로그인이 필요합니다", 401);
   const dept = user.department;
   const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
   const todayCount = await prisma.request.count({ where: { department: dept, createdAt: { gte: dayStart } } });

@@ -6,13 +6,36 @@
 
 const BASE = process.env.QA_BASE || "http://localhost:3310";
 
+// 신원은 세션 쿠키로만 실린다. 헤더로 사용자를 위장할 수 없으므로
+// 스위트도 실제로 로그인해서 쿠키를 들고 다닌다.
+const EMAIL = {
+  u_sales: "sales@example.com", u_design: "design@example.com",
+  u_fac: "fac@example.com", u_it: "it@example.com", u_ga: "ga@example.com",
+};
+const PASSWORD = "worktask1234";
+const jar = new Map();                       // userId → cookie 문자열
+
+async function login(userId) {
+  if (jar.has(userId)) return jar.get(userId);
+  const res = await fetch(BASE + "/api/auth/login", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: EMAIL[userId], password: PASSWORD }),
+  });
+  if (!res.ok) throw new Error(`로그인 실패: ${userId} (${res.status})`);
+  const cookie = (res.headers.getSetCookie?.() ?? [res.headers.get("set-cookie")])
+    .filter(Boolean).map((c) => c.split(";")[0]).join("; ");
+  jar.set(userId, cookie);
+  return cookie;
+}
+
 const R = { pass: 0, fail: 0, rows: [] };
 const C = { g: "\x1b[32m", r: "\x1b[31m", y: "\x1b[33m", d: "\x1b[2m", x: "\x1b[0m" };
 
-async function call(method, path, { user = "u_sales", body, raw } = {}) {
+async function call(method, path, { user = "u_sales", body, raw, anon = false } = {}) {
+  const headers = { "content-type": "application/json" };
+  if (!anon) headers.cookie = await login(user);
   const res = await fetch(BASE + path, {
-    method,
-    headers: { "content-type": "application/json", "x-user-id": user },
+    method, headers,
     body: body === undefined ? undefined : raw ? body : JSON.stringify(body),
   });
   let json = null, text = "";
@@ -51,9 +74,108 @@ t("A3", "기본", "부서 통계가 숫자 3개로 온다", async () => {
   return expect(ok, "200 / 숫자 3개", `${status} / ${JSON.stringify(json)}`);
 });
 
-t("A4", "기본", "알 수 없는 사용자 헤더는 거부된다", async () => {
-  const { status } = await call("GET", "/api/requests?view=mine", { user: "u_ghost" });
-  return expect(status === 400, "400", String(status));
+t("A4", "기본", "로그인 없이 목록을 볼 수 없다", async () => {
+  const { status } = await call("GET", "/api/requests?view=mine", { anon: true });
+  return expect(status === 401, "401", String(status));
+});
+
+/* ──────────────────────── H. 인증·계정 ──────────────────────── */
+
+t("H1", "인증", "모든 쓰기 API가 비로그인을 막는다", async () => {
+  const eps = [
+    ["POST", "/api/requests"], ["POST", "/api/ai/analyze"],
+    ["POST", "/api/requests/1/assign"], ["POST", "/api/requests/1/transition"],
+    ["POST", "/api/requests/1/comments"], ["POST", "/api/requests/1/follow"],
+  ];
+  const codes = [];
+  for (const [m, p] of eps) codes.push((await call(m, p, { anon: true, body: {} })).status);
+  return expect(codes.every((c) => c === 401), "모두 401", JSON.stringify(codes));
+});
+
+t("H2", "인증", "모든 읽기 API가 비로그인을 막는다", async () => {
+  const eps = ["/api/requests?view=mine", "/api/requests/1", "/api/stats", "/api/users", "/api/members", "/api/auth/me"];
+  const codes = [];
+  for (const p of eps) codes.push((await call("GET", p, { anon: true })).status);
+  return expect(codes.every((c) => c === 401), "모두 401", JSON.stringify(codes));
+});
+
+t("H3", "인증", "틀린 비밀번호는 401", async () => {
+  const { status } = await call("POST", "/api/auth/login", { anon: true, body: { email: EMAIL.u_fac, password: "wrong-password" } });
+  return expect(status === 401, "401", String(status));
+});
+
+t("H4", "인증", "없는 계정과 틀린 비밀번호의 응답이 구분되지 않는다", async () => {
+  // 메시지가 다르면 계정이 존재하는지 알아낼 수 있다
+  const a = await call("POST", "/api/auth/login", { anon: true, body: { email: EMAIL.u_fac, password: "wrong-password" } });
+  const b = await call("POST", "/api/auth/login", { anon: true, body: { email: "nobody@example.com", password: "wrong-password" } });
+  return expect(a.status === b.status && a.json?.error === b.json?.error,
+    "동일한 응답", `${a.status}:${a.json?.error} vs ${b.status}:${b.json?.error}`);
+});
+
+t("H5", "인증", "세션 쿠키는 HttpOnly 로 내려온다", async () => {
+  const res = await fetch(BASE + "/api/auth/login", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: EMAIL.u_ga, password: PASSWORD }) });
+  const raw = (res.headers.getSetCookie?.() ?? [res.headers.get("set-cookie")]).join(" ");
+  return expect(/HttpOnly/i.test(raw) && /SameSite=Lax/i.test(raw), "HttpOnly + SameSite=Lax", raw.slice(0, 120));
+});
+
+t("H6", "인증", "가입 시 담당자 여부는 부서가 정한다", async () => {
+  const em = `qa_esc_${Date.now()}@example.com`;
+  // 본문으로 isHandler 를 주장해도 무시되어야 한다
+  const { json } = await call("POST", "/api/auth/signup", { anon: true,
+    body: { email: em, password: "qapassword123", name: "QA권한", department: "영업팀", isHandler: true } });
+  return expect(json?.user?.isHandler === false, "isHandler=false", String(json?.user?.isHandler));
+});
+
+t("H7", "인증", "담당 부서로 가입하면 담당자가 되고 부서 큐가 보인다", async () => {
+  const em = `qa_fac_${Date.now()}@example.com`;
+  const res = await fetch(BASE + "/api/auth/signup", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: em, password: "qapassword123", name: "QA시설", department: "시설팀" }) });
+  const d = await res.json();
+  if (d?.user?.isHandler !== true) return expect(false, "isHandler=true", String(d?.user?.isHandler));
+  const cookie = (res.headers.getSetCookie?.() ?? [res.headers.get("set-cookie")])
+    .filter(Boolean).map((c) => c.split(";")[0]).join("; ");
+  const q = await fetch(BASE + "/api/requests?view=queue", { headers: { cookie } });
+  const items = (await q.json()).items;
+  return expect(items.every((i) => i.department === "시설팀"), "시설팀만", JSON.stringify(items.map((i) => i.department)));
+});
+
+t("H8", "인증", "가입 입력 검증", async () => {
+  const cases = [
+    [{ email: "bad", password: "qapassword123", name: "x", department: "시설팀" }, "이메일"],
+    [{ email: "a@b.co", password: "short", name: "x", department: "시설팀" }, "비밀번호"],
+    [{ email: "a@b.co", password: "qapassword123", name: "x", department: "없는팀" }, "부서"],
+    [{ email: EMAIL.u_fac, password: "qapassword123", name: "x", department: "시설팀" }, "중복"],
+  ];
+  const codes = [];
+  for (const [body] of cases) codes.push((await call("POST", "/api/auth/signup", { anon: true, body })).status);
+  return expect(codes.every((c) => c === 400), "모두 400", JSON.stringify(codes));
+});
+
+t("H9", "인증", "로그아웃하면 세션이 서버에서 무효가 된다", async () => {
+  const res = await fetch(BASE + "/api/auth/login", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: EMAIL.u_design, password: PASSWORD }) });
+  const cookie = (res.headers.getSetCookie?.() ?? [res.headers.get("set-cookie")])
+    .filter(Boolean).map((c) => c.split(";")[0]).join("; ");
+  const before = (await fetch(BASE + "/api/auth/me", { headers: { cookie } })).status;
+  await fetch(BASE + "/api/auth/logout", { method: "POST", headers: { cookie } });
+  // 쿠키를 그대로 다시 써도 통하면 안 된다
+  const after = (await fetch(BASE + "/api/auth/me", { headers: { cookie } })).status;
+  return expect(before === 200 && after === 401, "200 → 401", `${before} → ${after}`);
+});
+
+t("H10", "인증", "위조한 세션 토큰은 통하지 않는다", async () => {
+  const res = await fetch(BASE + "/api/auth/me", { headers: { cookie: "wt_session=" + "0".repeat(64) } });
+  return expect(res.status === 401, "401", String(res.status));
+});
+
+t("H11", "인증", "사용자 목록에 비밀번호 해시·이메일이 실리지 않는다", async () => {
+  const { json } = await call("GET", "/api/users");
+  const leaked = json.users.filter((u) => "passwordHash" in u || "email" in u);
+  return expect(leaked.length === 0, "유출 0건", JSON.stringify(leaked));
 });
 
 /* ─────────────────────── B. 등록 입력 검증 ─────────────────────── */

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { api, categoryLabel, statusLabel, priorityLabel, code, fmtDate, fmtTime, ST_COLOR } from "@/lib/ui";
 import { StatusBadge, Avatar } from "@/components/Badges";
 import Modal, { Field } from "@/components/Modal";
-import { SEED_USERS, deptToHandlers } from "@/lib/domain";
+
 
 const FLOW = ["SUBMITTED", "IN_PROGRESS", "RESOLVED", "CLOSED"] as const;
 
@@ -15,21 +15,20 @@ export default function DetailPage({ params }: { params: Promise<{ id: string }>
   const [modal, setModal] = useState<any>(null);
   const [comment, setComment] = useState("");
   const [err, setErr] = useState("");
+  const [memberList, setMemberList] = useState<{ id: string; name: string; department: string }[]>([]);
   const router = useRouter();
 
   async function load() { try { setD(await api(`/api/requests/${id}`)); setErr(""); } catch (e: any) { setErr(e.message); } }
   useEffect(() => { load(); }, [id]);
+  // 담당 변경 대상은 그 요청의 담당 부서에서 가져온다
   useEffect(() => {
-    const h = () => load();
-    window.addEventListener("user-changed", h);
-    return () => window.removeEventListener("user-changed", h);
-  }, [id]);
+    if (!d?.department) return;
+    api(`/api/members?dept=${encodeURIComponent(d.department)}`)
+      .then((r) => setMemberList(r.members)).catch(() => setMemberList([]));
+  }, [d?.department]);
   if (!d) return <p className="sm2" style={{ padding: 40 }}>불러오는 중…</p>;
 
-  const members = (deptToHandlers[d.department] ?? []).map((uid: string) => {
-    const u = SEED_USERS.find((s) => s.id === uid)!;
-    return { value: u.id, label: `${u.name} (${u.department})` };
-  });
+  const members = memberList.map((u) => ({ value: u.id, label: `${u.name} (${u.department})` }));
 
   function openAction(a: any) {
     const need = a.needs ?? [];
