@@ -31,7 +31,10 @@ async function tryExec(sql) {
 
 await tryExec(`ALTER TABLE "User" ADD COLUMN "email" TEXT`);
 await tryExec(`ALTER TABLE "User" ADD COLUMN "passwordHash" TEXT`);
-await tryExec(`ALTER TABLE "User" ADD COLUMN "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`);
+// SQLite 는 ADD COLUMN 에 상수가 아닌 기본값(CURRENT_TIMESTAMP)을 허용하지 않는다.
+// 널로 추가한 뒤 채운다. Prisma 스키마상 필수라 NULL 이 남지 않게 한다.
+await tryExec(`ALTER TABLE "User" ADD COLUMN "createdAt" DATETIME`);
+await tryExec(`UPDATE "User" SET "createdAt" = CURRENT_TIMESTAMP WHERE "createdAt" IS NULL`);
 await tryExec(`CREATE UNIQUE INDEX "User_email_key" ON "User"("email")`);
 await tryExec(`CREATE TABLE "Session" (
   "token" TEXT NOT NULL PRIMARY KEY,
