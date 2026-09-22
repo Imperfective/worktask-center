@@ -6,6 +6,13 @@
 > **동작 중인 서비스 → https://minkyu.app**
 > 로그인 없이 상단 오른쪽 **사용자 전환**으로 요청자·담당자 관점을 바로 오갈 수 있습니다.
 
+| | |
+|---|---|
+| [문제를 어떻게 봤나](#문제를-어떻게-봤나) · [설계 요점](#설계-요점) | 왜 이렇게 만들었나 |
+| [시스템 아키텍처](#시스템-아키텍처) · [API 명세](#api-명세) | 어떻게 돌아가나 |
+| [품질 검증 (QA)](#품질-검증-qa) | 무엇을 어떻게 확인했나 |
+| [실행](#실행) · [구조](#구조) | 직접 돌려보기 |
+
 ---
 
 ## 문제를 어떻게 봤나
@@ -120,7 +127,250 @@ AI는 **Ollama 로컬 경량 모델**(`qwen2.5:1.5b`)로 돌아 외부 API 키�
 
 ---
 
-## 검증 (QA 스위트)
+## 시스템 아키텍처
+
+### 전체 구성
+
+```
+ 브라우저
+    │  HTTPS
+    ▼
+┌─────────────────────────────────────────────────────────┐
+│ deepvoice-caddy (Docker)        :80 / :443              │
+│  · TLS 자동 발급·갱신                                    │
+│  · minkyu.app → reverse_proxy worktask-app:3300         │
+│  · 같은 서버의 ai-hci.org · hermes-company.com 과 공존   │
+└───────────────┬─────────────────────────────────────────┘
+                │ deepvoice-net (도커 네트워크)
+                ▼
+┌─────────────────────────────────────────────────────────┐
+│ worktask-app   Next.js 15 standalone   :3300            │
+│  ├ App Router 화면 4개 (요청하기·내 요청·처리할 요청·상세) │
+│  ├ Route Handlers = API 10개                             │
+│  └ Prisma Client                                         │
+└───────┬─────────────────────────────┬───────────────────┘
+        │ 파일 I/O                     │ HTTP (worktask 네트워크)
+        ▼                             ▼
+┌───────────────────┐     ┌─────────────────────────────┐
+│ SQLite            │     │ worktask-ollama             │
+│ /app/data/app.db  │     │ qwen2.5:1.5b · CPU · 3GB 상한│
+│ 도커 볼륨에 영속   │     │ 실패·타임아웃 시 규칙기반 대체 │
+└───────────────────┘     └─────────────────────────────┘
+```
+
+- **앱 컨테이너는 포트를 열지 않는다.** 기존 Caddy가 도커 네트워크로 직접 붙는다.
+  호스트 포트를 새로 여는 순간 같은 서버의 다른 서비스와 충돌할 수 있기 때문이다.
+- **Ollama는 외부에 노출되지 않는다.** `worktask` 내부 네트워크에만 속해 앱만 호출한다.
+- 메모리 상한 3GB를 걸어 같은 서버의 기존 서비스를 압박하지 않게 했다.
+
+### 요청 한 건이 흐르는 경로
+
+```
+[등록]  화면 → POST /api/requests
+          → 입력 검증(validate.ts) → 카테고리로 부서 결정
+          → requests 1행 INSERT
+          → request_events 에 CREATED (+ AI 모드면 AI_SUGGESTED) INSERT
+          → { id } 반환 → /r/:id 로 이동
+
+[전이]  화면 → POST /api/requests/:id/transition
+          → 전이 맵(transitions.ts)에서 "이 역할이 이 상태에서 이 액션" 이 있는지 확인
+          → 필수 입력(사유·처리 내역) 검증
+          → requests UPDATE + request_events 에 STATUS_CHANGED INSERT
+          → 갱신된 상세 DTO 를 그대로 반환 (화면은 재조회하지 않는다)
+```
+
+상태를 바꾸는 모든 API는 **갱신된 상세 DTO를 응답으로 돌려준다.** 화면이 따로 다시
+읽지 않아도 되고, 무엇보다 화면이 계산한 상태와 서버 상태가 어긋날 여지가 없다.
+
+### 데이터 모델
+
+```
+users ──┬─< requests >──┬─< request_events     (추가 전용 이력)
+        │   requesterId │
+        └───────────────┴─< request_followers  (참여자, PK = requestId+userId)
+            assigneeId
+            duplicateOfId ──> requests (중복 반려 시 원본)
+```
+
+| 테이블 | 역할 |
+|---|---|
+| `users` | 시드 5명 (요청자 2 · 담당자 3). PoC라 로그인 없이 헤더로 식별 |
+| `requests` | **현재 상태**만 들고 있다 |
+| `request_events` | **모든 변경 이력.** 수정·삭제 API가 없는 추가 전용 |
+| `request_followers` | 참여자. 복합 PK라 같은 사람이 두 번 들어갈 수 없다 |
+
+`requests`가 현재 상태를, `request_events`가 과정을 나눠 맡는다. 목록·상세는 한 행만
+읽으면 되고, "누가 언제 무엇을 왜" 는 이벤트를 순서대로 읽으면 재구성된다.
+
+### 결과가 실제로 쌓이는가 — 운영 환경에서 확인
+
+DB는 도커 볼륨 `worktask-center_worktask-data` 의 `/app/data/app.db` 에 있다.
+배포로 컨테이너를 다시 만들어도 볼륨은 유지된다.
+
+운영 API로 요청 한 건을 등록해 **등록 → 배정 → 완료 → 종료**까지 돌린 뒤,
+`docker restart worktask-app` 으로 컨테이너를 재시작하고 다시 조회했다.
+
+```
+1) POST /api/requests                       → id = 11
+2) POST /api/requests/11/assign             → IN_PROGRESS · 담당 박시설
+3) POST /api/requests/11/transition resolve → RESOLVED
+4) POST /api/requests/11/transition close   → CLOSED
+5) docker restart worktask-app  후 재조회   → CLOSED · 이벤트 5건 그대로
+
+   CREATED         김영업  {"title":"[검증] 2층 탕비실 조명 깜빡임", ...}
+   ASSIGNED        박시설  {"to_user_id":"u_fac","by":"self"}
+   STATUS_CHANGED  박시설  {"from":"SUBMITTED","to":"IN_PROGRESS"}
+   STATUS_CHANGED  박시설  {"from":"IN_PROGRESS","to":"RESOLVED","result":"안정기 교체 완료..."}
+   STATUS_CHANGED  김영업  {"from":"RESOLVED","to":"CLOSED"}
+```
+
+상태 변경뿐 아니라 **행위자와 입력한 문장까지** 이벤트에 남아 재시작 후에도 복원된다.
+(위 검증용 요청 #11은 확인 후 삭제했다. 현재 운영 DB는 시드 10건 상태)
+
+---
+
+## API 명세
+
+모든 엔드포인트는 `application/json` 을 주고받는다. **외부 API 키가 없다.**
+
+### 인증 — PoC 한정
+
+로그인 대신 **`x-user-id` 헤더**로 사용자를 식별한다. 브라우저는 `localStorage` 에
+선택한 사용자를 저장하고 모든 호출에 실어 보낸다 (`src/lib/ui.ts`의 `api()`).
+
+```
+x-user-id: u_sales | u_design | u_fac | u_it | u_ga     (없으면 u_sales)
+```
+
+권한은 헤더가 아니라 **서버가 DB에서 다시 판정한다.** 요청의 담당 부서와 사용자의
+부서·담당자 여부를 대조해 역할(`handler` / `requester`)을 정한다(`serve.ts`의 `rolesFor`).
+헤더를 바꿔도 남의 부서 요청을 배정할 수 없다(QA C1·C2).
+
+> 실서비스로 가면 이 헤더를 세션·SSO로 바꾸면 된다. 역할 판정과 전이 검증은
+> 이미 서버에 있으므로 인증 계층만 갈아끼우면 된다.
+
+### 공통 응답
+
+| 상황 | 코드 | 본문 |
+|---|---|---|
+| 성공 | 200 | 엔드포인트별 DTO |
+| 입력·규칙 위반 | 400 | `{ "error": "사람이 읽을 한국어 메시지" }` |
+| 권한 없음 | 403 | `{ "error": "..." }` |
+| 대상 없음 | 404 | `{ "error": "요청을 찾을 수 없습니다" }` |
+
+오류 메시지는 화면에 그대로 표시된다. 그래서 `"invalid request"` 같은 말 대신
+`"원본 요청 #999999 을(를) 찾을 수 없습니다"` 처럼 무엇을 고쳐야 할지 적는다.
+
+### 엔드포인트
+
+#### `GET /api/users`
+사용자 전환 드롭다운용. → `{ users: [{ id, name, department, isHandler }] }`
+
+#### `GET /api/requests?view=&tab=`
+| 파라미터 | 값 | 의미 |
+|---|---|---|
+| `view` | `mine`(기본) | 내가 낸 것 + 내가 참여 중인 것 |
+| | `queue` | 내 부서로 접수된 것 (담당자용) |
+| `tab` | mine: `progress` `resolved` `closed` | 진행 중 / 완료 / 종료·반려 |
+| | queue: `unassigned` `mine` `hold` `resolved` | 미배정 / 내게 할당 / 보류 / 완료 |
+
+→ `{ items: [...] }`. 정렬은 **긴급도 → 최근 업데이트순**.
+
+```json
+{ "id": 24, "title": "사내 그룹웨어 접속 불가", "summary": "그룹웨어 전사 접속 장애",
+  "category": "it_incident", "department": "IT팀", "priority": "urgent", "status": "SUBMITTED",
+  "requesterId": "u_sales", "assigneeId": null, "duplicateOfId": null,
+  "holdReason": null, "holdResumeDate": null, "result": null, "rejectReason": null,
+  "followerCount": 0, "requesterName": "김영업", "assigneeName": null,
+  "createdAt": "...", "updatedAt": "...", "resolvedAt": null }
+```
+
+#### `POST /api/requests` — 등록
+```json
+{ "title": "1~120자", "description": "1~500자", "category": "<6개 키 중 하나>",
+  "priority": "low|normal|high|urgent", "summary": "0~200자",
+  "mode": "ai|manual", "aiSuggestion": {...}|null, "acceptedFields": {...} }
+```
+→ `{ "id": 11 }` · 부서는 카테고리에서 서버가 정한다(본문으로 못 바꾼다) · 상태는 항상 `SUBMITTED`
+
+거절: 제목·본문 공백 또는 길이 초과, 미지정 카테고리·긴급도, 깨진 JSON → 400
+`aiSuggestion` 을 보내면 `AI_SUGGESTED` 이벤트가 함께 남아 **제안 수용률**을 나중에 계산할 수 있다.
+
+#### `GET /api/requests/:id` — 상세
+요청 필드 전체 + 아래를 덧붙여 돌려준다.
+
+| 필드 | 내용 |
+|---|---|
+| `requester` `assignee` `followers` | 이름까지 펼친 사람 정보 |
+| `timeline[]` | `{ id, type, actor, actorId, payload, at }` 시간순 |
+| `viewer` | `{ id, role, isRequester, isFollower }` — 서버가 판정한 역할 |
+| `allowedActions[]` | `{ action, label, needs[], reasonLabel }` — **이 사람이 지금 할 수 있는 것** |
+| `canComment` `canFollow` | 코멘트·참여 가능 여부 |
+
+`allowedActions` 가 핵심이다. **화면은 버튼을 스스로 판단하지 않고 이 배열만 그린다.**
+전이 API도 같은 전이 맵을 보므로 버튼과 서버 규칙이 어긋날 수 없다.
+
+```json
+"allowedActions": [
+  { "action": "hold",     "label": "보류",      "needs": ["reason","resumeDate"], "reasonLabel": "보류 사유" },
+  { "action": "reject",   "label": "반려",      "needs": ["reason"],  "reasonLabel": "반려 사유" },
+  { "action": "reassign", "label": "담당 변경", "needs": ["member"] },
+  { "action": "resolve",  "label": "완료",      "needs": ["result"],  "reasonLabel": "처리 내역" } ]
+```
+
+#### `POST /api/requests/:id/transition` — 상태 전이
+```json
+{ "action": "hold|resume|resolve|close|reopen|reject",
+  "reason": "보류·반려·다시요청 사유", "result": "완료 시 처리 내역",
+  "resumeDate": "YYYY-MM-DD", "duplicateOfId": 8 }
+```
+→ 갱신된 **상세 DTO**
+
+| 거절 | 코드 |
+|---|---|
+| 이 역할·상태에서 허용되지 않는 액션 | 400 |
+| 요청자 액션인데 당사자가 아님 | 403 |
+| 필수 사유·처리 내역 누락(공백 포함) | 400 |
+| 배정 계열(`assign_self` `assign_member` `reassign`) | 400 — 배정 API 전담 |
+| `duplicateOfId` 가 없는 번호·자기 자신·이미 종료된 요청 | 400 |
+
+#### `POST /api/requests/:id/assign` — 배정·담당 변경
+```json
+{ "toUserId": "u_fac" }     // 생략하면 호출자 본인 (= 내가 맡기)
+```
+→ 갱신된 상세 DTO · `SUBMITTED` 면 **배정과 착수가 함께** 일어나 `IN_PROGRESS` 가 된다
+
+거절: 담당자 아님 403 · 대상이 그 부서 담당자가 아님 400 · **완료·종료·반려 상태** 400 · 이미 같은 담당자 400
+
+#### `POST /api/requests/:id/comments`
+`{ "body": "1~1000자" }` → 상세 DTO · 종료된 요청은 400
+
+#### `POST /api/requests/:id/follow` — 같은 문제로 참여
+`{ "via": "register|detail|duplicate" }` → 상세 DTO
+본인 요청 400 · 종료·반려 상태 400 · **이미 참여 중이면 이력을 남기지 않는다**
+
+#### `POST /api/ai/analyze` — 제안 + 유사 요청
+```json
+{ "text": "1~2000자", "mode": "ai|manual" }
+```
+```json
+{ "suggestion": { "title": "...", "category": "facility_repair", "urgency": "urgent",
+                  "urgency_reason": "판단 근거 한 문장", "summary": "...",
+                  "source": "ollama|rule" },
+  "similar": [ { "id": 8, "title": "...", "status": "IN_PROGRESS", "priority": "high",
+                 "assigneeName": "박시설", "followerCount": 2, "score": 42 } ] }
+```
+
+- **등록 화면이 입력 700ms마다 자동 호출한다.** 누르는 버튼이 없다.
+- `mode: "manual"` 이면 `summary` 만 채우고 제목·카테고리·긴급도는 비운다.
+- 유사 요청은 열린 상태 + 완료 건에서, **본인 요청은 빼고**, Dice 계수 0.18 이상 상위 3건.
+- `source` 가 `ollama` 인지 `rule` 인지 응답에 담긴다. 모델이 죽어도 200으로 답한다.
+
+#### `GET /api/stats`
+→ `{ "todayCount": 2, "avgResolveHours": 40, "unassignedUrgent": 0 }` (호출자 부서 기준)
+
+
+## 품질 검증 (QA)
 
 예외 케이스를 사람이 매번 클릭해 확인하면 빠뜨린다. API를 직접 두드리는
 **52→57건 시나리오 스위트**를 만들어 규칙이 서버에서 실제로 강제되는지 확인한다.
@@ -141,6 +391,135 @@ npm run qa -- D       # 접두사로 특정 그룹만 (A 기본 / B 등록검증
 | E 중복참여 | 10 | 본인 참여, 중복 이력, 없는 원본·자기 참조 원본 |
 | F AI | 6 | 빈 입력, 허용값 밖 분류, 본인 요청 제외, 초장문 |
 | G 목록 | 7 | 부서 격리, 긴급 정렬, 404, 타임라인 순서 |
+
+
+### 시나리오 57건 전체
+
+`t(id, 그룹, 이름)` 으로 등록된 케이스 그대로다. 정상 흐름은 최소한만 두고
+**예외 경로에 무게를 실었다.**
+
+<details>
+<summary><b>A 기본 (4건)</b> — 시드·목록·통계·미인증</summary>
+
+| ID | 확인하는 것 |
+|---|---|
+| A1 | 사용자 5명이 시드된다 |
+| A2 | 내 요청 목록이 배열로 온다 |
+| A3 | 부서 통계가 숫자 3개로 온다 |
+| A4 | 알 수 없는 사용자 헤더는 거부된다 |
+</details>
+
+<details>
+<summary><b>B 등록 검증 (9건)</b> — 잘못된 값이 DB에 들어가지 않는가</summary>
+
+| ID | 확인하는 것 |
+|---|---|
+| B1 | 제목 누락은 400 |
+| B2 | 본문 누락은 400 |
+| B3 | 카테고리 누락은 400 |
+| B4 | 공백뿐인 제목은 400 |
+| B5 | 알 수 없는 카테고리는 400 |
+| B6 | 알 수 없는 긴급도는 400 |
+| B7 | 본문 500자 초과는 400 |
+| B8 | 깨진 JSON 본문은 500이 아니라 400 |
+| B9 | 정상 등록 시 부서가 카테고리에서 자동 배정된다 |
+</details>
+
+<details>
+<summary><b>C 권한 (5건)</b> — 헤더를 바꿔도 못 하는 것</summary>
+
+| ID | 확인하는 것 |
+|---|---|
+| C0 | 권한 시나리오용 요청 준비 |
+| C1 | 타 부서 담당자는 배정할 수 없다 |
+| C2 | 요청자는 배정할 수 없다 |
+| C3 | 부서 담당자가 아닌 대상에는 배정할 수 없다 |
+| C4 | 존재하지 않는 사용자에게는 배정할 수 없다 |
+</details>
+
+<details>
+<summary><b>D 상태 전이 (16건)</b> — 전이 맵이 서버에서 실제로 강제되는가</summary>
+
+| ID | 확인하는 것 |
+|---|---|
+| D1 | 접수 상태에서 바로 완료 처리할 수 없다 |
+| D2 | 배정하면 처리중이 되고 담당자가 기록된다 |
+| D3 | transition으로 배정하면 담당자 없는 처리중이 되면 안 된다 |
+| D4 | 보류는 사유 없이 불가 |
+| D5 | 보류 → 재개 → 완료 → 종료가 이어진다 |
+| D6 | 재개 후 보류 사유가 지워진다 |
+| D7 | 완료는 처리 내역 없이 불가 |
+| D8 | 종료된 요청에는 코멘트를 달 수 없다 |
+| D9 | 종료된 요청은 더 전이되지 않는다 |
+| D10 | 종료된 요청의 담당자는 바꿀 수 없다 |
+| D11 | 요청 당사자가 아니면 종료할 수 없다 |
+| D12 | 반려 → 다시 요청이 처리중으로 되돌린다 |
+| D13 | 다시 요청은 사유 없이 불가 |
+| D14 | 알 수 없는 액션은 400 |
+| D15 | 담당자가 직접 낸 요청도 본인이 종료할 수 있다 |
+| D16 | transition으로 담당 변경을 우회할 수 없다 |
+</details>
+
+<details>
+<summary><b>E 중복·참여 (10건)</b> — 중복 반려와 참여자 자동 추가</summary>
+
+| ID | 확인하는 것 |
+|---|---|
+| E0 | 중복 시나리오용 원본/중복 요청 준비 |
+| E1 | 본인 요청에는 참여할 수 없다 |
+| E2 | 타인 요청에 참여하면 참여자에 들어간다 |
+| E3 | 같은 사람이 두 번 참여해도 이력은 하나다 |
+| E4 | 중복 반려하면 요청자가 원본의 참여자가 된다 |
+| E5 | 반려된 요청에는 참여할 수 없다 |
+| E6 | 존재하지 않는 원본으로 중복 반려하면 400 |
+| E7 | 자기 자신을 원본으로 지정할 수 없다 |
+| E8 | 같은 사람의 요청을 원본으로 지정해도 본인 참여는 생기지 않는다 |
+| E9 | 잘못된 형식의 원본 ID는 400 |
+</details>
+
+<details>
+<summary><b>F AI (6건)</b> — 모델이 무엇을 내놓든 화면이 깨지지 않는가</summary>
+
+| ID | 확인하는 것 |
+|---|---|
+| F1 | 빈 텍스트 분석은 400 |
+| F2 | 제안 카테고리·긴급도가 허용값 안에 있다 |
+| F3 | 직접 입력 모드는 요약만 만든다 |
+| F4 | 유사 요청에 본인 요청은 포함되지 않는다 |
+| F5 | 아주 긴 입력에도 죽지 않는다 |
+| F6 | text 필드 누락은 500이 아니라 400 |
+</details>
+
+<details>
+<summary><b>G 목록·정렬 (7건)</b> — 부서 격리와 정렬</summary>
+
+| ID | 확인하는 것 |
+|---|---|
+| G1 | 처리할 요청 큐에는 본인 부서만 보인다 |
+| G2 | 긴급 요청이 목록 맨 앞에 온다 |
+| G2b | 코멘트 1000자 초과는 400 |
+| G3 | 없는 요청 상세는 404 |
+| G4 | 숫자가 아닌 요청 id는 500이 아니라 404 |
+| G5 | 코멘트 빈 내용은 400 |
+| G6 | 타임라인이 시간순 추가 전용으로 쌓인다 |
+</details>
+
+### 자동 스위트로 잡히지 않는 것 — 손으로 확인한 항목
+
+API 스위트는 서버 규칙만 본다. 화면 동작과 배포 상태는 따로 확인했다.
+
+| 항목 | 방법 | 결과 |
+|---|---|---|
+| 자동 분석이 버튼 없이 도는가 | 한 글자씩 36자 입력 후 상태 확인 | 제목·카테고리·긴급도·요약 + 유사 요청 3건 |
+| 사용자가 고친 값을 덮지 않는가 | 긴급도·제목을 바꾼 뒤 본문 추가 입력 | 두 값 유지, 요약만 갱신 |
+| 느린 응답이 최신 결과를 덮지 않는가 | A 분석 중 B로 교체 | 최신 입력 기준으로 정착 |
+| 오류가 화면에 보이는가 | 반려 모달에 없는 원본 ID 입력 | 모달 안에 한국어 메시지 |
+| 모바일 레이아웃 | iframe에 실제 폭을 주고 `scrollWidth - innerWidth` | 280~1440px 9개 폭에서 넘침 0 |
+| 드롭다운을 연 상태의 넘침 | 같은 방법, 팝오버 열고 측정 | 9개 폭 모두 0 |
+| DB 영속 | 운영 API로 생애주기 1회전 + 컨테이너 재시작 | 상태·이벤트 5건 그대로 |
+| Ollama 경로 | 운영 API 호출해 `source` 확인 | `source: "ollama"` |
+| 규칙 기반 대체 경로 | 모델 없는 로컬에서 같은 입력 | `source: "rule"` 로 동일 화면 |
+| 기존 서비스 영향 | Caddy 등록 8개 호스트 응답 확인 | 전부 정상 (200/301/302) |
 
 ### 첫 실행에서 나온 결함 12건과 수정
 
@@ -226,10 +605,15 @@ src/lib/ai.ts            Ollama 호출 + 규칙 기반 fallback(키워드·bigra
 src/lib/serve.ts         사용자 식별·역할 판정(복수 역할)·이벤트 기록·상세 DTO
 src/lib/validate.ts      입력 검증·id 파싱·JSON 파싱 — 라우트 공용
 
-src/app/api/requests     목록(내 요청/부서 큐) · 등록
-src/app/api/requests/[id]/{assign,transition,comments,follow}
-src/app/api/ai/analyze   자연어 → 제안 + 유사 요청
-src/app/api/stats        오늘 접수 · 평균 처리 시간 · 미배정 긴급
+src/app/api/requests     GET 목록(내 요청/부서 큐) · POST 등록
+src/app/api/requests/[id]            GET 상세 DTO (허용 액션 포함)
+src/app/api/requests/[id]/assign     POST 배정·담당 변경
+src/app/api/requests/[id]/transition POST 상태 전이
+src/app/api/requests/[id]/comments   POST 코멘트
+src/app/api/requests/[id]/follow     POST 같은 문제로 참여
+src/app/api/ai/analyze   POST 자연어 → 제안 + 유사 요청
+src/app/api/stats        GET 오늘 접수 · 평균 처리 시간 · 미배정 긴급
+src/app/api/users        GET 사용자 전환 목록
 
 src/app/                 요청하기 / my(내 요청) / queue(처리할 요청) / r/[id](상세)
 prisma/schema.prisma     4테이블 (users · requests · request_events · request_followers)
